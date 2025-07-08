@@ -34,6 +34,7 @@ def send_message(chat_id, text, reply_markup=None):
         "text": text
     }
     if reply_markup:
+        import json
         payload["reply_markup"] = json.dumps(reply_markup)
     requests.post(f"{API_URL}/sendMessage", data=payload)
 
@@ -51,36 +52,45 @@ def send_video(chat_id, file_id, caption=""):
 def is_member(user_id):
     return True  # عضویت غیرفعال شده
 
+# تابع جدید بدون تست، فقط خواندن همه فایل‌های متنی داخل مخزن (بازگشتی)
+def fetch_files_recursively(api_url):
+    all_configs = []
+    try:
+        r = requests.get(api_url)
+        items = r.json()
+        for item in items:
+            if item["type"] == "file" and item["name"].endswith(".txt"):
+                raw_url = item["download_url"]
+                try:
+                    response = requests.get(raw_url, timeout=5)
+                    if response.status_code == 200:
+                        all_configs.append((item["name"], response.text))
+                except:
+                    pass
+            elif item["type"] == "dir":
+                all_configs.extend(fetch_files_recursively(item["url"]))
+    except:
+        pass
+    return all_configs
+
 def fetch_and_test_configs():
-    valid_configs = []
     url = data["github_url"]
     if not url or "github.com" not in url:
-        return valid_configs
+        return []
 
     if url.endswith('/'):
         url = url[:-1]
 
     try:
-        # Example: https://github.com/user/repo -> https://api.github.com/repos/user/repo/contents/
         parts = url.replace("https://github.com/", "").split("/")
         if len(parts) >= 2:
             owner, repo = parts[0], parts[1]
             api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/"
-            r = requests.get(api_url)
-            files = r.json()
-
-            for file in files:
-                if file["name"].endswith(".txt"):
-                    raw_url = file["download_url"]
-                    try:
-                        response = requests.get(raw_url, timeout=5)
-                        if response.status_code == 200:
-                            valid_configs.append((file["name"], response.text))
-                    except:
-                        pass
+            return fetch_files_recursively(api_url)
     except:
-        pass
-    return valid_configs
+        return []
+
+    return []
 
 def show_user_panel(chat_id):
     markup = {
@@ -104,9 +114,6 @@ def handle_config(chat_id):
     send_message(chat_id, "⏳ در حال دریافت کانفیگ‌ها ...")
     configs = fetch_and_test_configs()
     if configs:
-        result = ""
-        for name, _ in configs:
-            result += f"\n{name}: تست شد ✔️"
         filename = f"configs_{chat_id}.txt"
         with open(filename, 'w', encoding='utf-8') as f:
             for name, text in configs:
