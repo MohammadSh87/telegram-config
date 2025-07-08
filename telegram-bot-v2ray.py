@@ -2,6 +2,7 @@ import requests
 import time
 import os
 from datetime import datetime
+import json
 
 TOKEN = '8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA'
 ADMIN_USERNAME = 'Mohammad87killer'
@@ -10,7 +11,7 @@ OFFSET = 0
 
 data = {
     "join_channel": "",
-    "github_url": "",
+    "config_url": "",  # لینک مستقیم فایل txt کانفیگ‌ها
     "video_android": "",
     "video_ios": "",
     "video_windows": "",
@@ -34,7 +35,6 @@ def send_message(chat_id, text, reply_markup=None):
         "text": text
     }
     if reply_markup:
-        import json
         payload["reply_markup"] = json.dumps(reply_markup)
     requests.post(f"{API_URL}/sendMessage", data=payload)
 
@@ -52,45 +52,19 @@ def send_video(chat_id, file_id, caption=""):
 def is_member(user_id):
     return True  # عضویت غیرفعال شده
 
-# تابع جدید بدون تست، فقط خواندن همه فایل‌های متنی داخل مخزن (بازگشتی)
-def fetch_files_recursively(api_url):
-    all_configs = []
+def fetch_and_test_config_file():
+    url = data["config_url"]
+    if not url:
+        return None
+
     try:
-        r = requests.get(api_url)
-        items = r.json()
-        for item in items:
-            if item["type"] == "file" and item["name"].endswith(".txt"):
-                raw_url = item["download_url"]
-                try:
-                    response = requests.get(raw_url, timeout=5)
-                    if response.status_code == 200:
-                        all_configs.append((item["name"], response.text))
-                except:
-                    pass
-            elif item["type"] == "dir":
-                all_configs.extend(fetch_files_recursively(item["url"]))
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200 and r.text.strip():
+            # می‌تونیم اعتبارسنجی‌های ساده اضافه کنیم مثل وجود کلمات کلیدی خاص یا فرمت مشخص
+            return r.text
     except:
         pass
-    return all_configs
-
-def fetch_and_test_configs():
-    url = data["github_url"]
-    if not url or "github.com" not in url:
-        return []
-
-    if url.endswith('/'):
-        url = url[:-1]
-
-    try:
-        parts = url.replace("https://github.com/", "").split("/")
-        if len(parts) >= 2:
-            owner, repo = parts[0], parts[1]
-            api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/"
-            return fetch_files_recursively(api_url)
-    except:
-        return []
-
-    return []
+    return None
 
 def show_user_panel(chat_id):
     markup = {
@@ -102,7 +76,7 @@ def show_user_panel(chat_id):
 def show_admin_panel(chat_id):
     markup = {
         "keyboard": [
-            ["📢 تنظیم کانال عضویت", "🔗 تنظیم لینک گیت‌هاب"],
+            ["📢 تنظیم کانال عضویت", "🔗 تنظیم لینک فایل کانفیگ"],
             ["🎞 بارگذاری ویدیو آموزش", "⏰ تنظیم بازه زمانی تست"],
             ["👥 مشاهده تنظیمات", "📡 تست و ارسال کانفیگ"]
         ],
@@ -111,18 +85,17 @@ def show_admin_panel(chat_id):
     send_message(chat_id, "به پنل ادمین خوش آمدید.", reply_markup=markup)
 
 def handle_config(chat_id):
-    send_message(chat_id, "⏳ در حال دریافت کانفیگ‌ها ...")
-    configs = fetch_and_test_configs()
-    if configs:
-        filename = f"configs_{chat_id}.txt"
+    send_message(chat_id, "⏳ در حال دریافت کانفیگ ...")
+    config_text = fetch_and_test_config_file()
+    if config_text:
+        filename = f"config_{chat_id}.txt"
         with open(filename, 'w', encoding='utf-8') as f:
-            for name, text in configs:
-                f.write(f"{name}\n{text}\n\n")
-            f.write(f"\nتاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(config_text)
+            f.write(f"\n\nتاریخ دریافت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         send_document(chat_id, filename)
         os.remove(filename)
     else:
-        send_message(chat_id, "❌ کانفیگ سالم یافت نشد.")
+        send_message(chat_id, "❌ فایل کانفیگ معتبر یافت نشد یا لینک صحیح نیست.")
 
 def handle_tutorial(chat_id):
     if data["video_android"]:
@@ -153,9 +126,9 @@ def main():
                 if state == "set_channel":
                     data["join_channel"] = text.strip()
                     send_message(chat_id, "✅ کانال ذخیره شد.")
-                elif state == "set_github":
-                    data["github_url"] = text.strip()
-                    send_message(chat_id, "✅ لینک گیت‌هاب ذخیره شد.")
+                elif state == "set_config_url":
+                    data["config_url"] = text.strip()
+                    send_message(chat_id, "✅ لینک فایل کانفیگ ذخیره شد.")
                 elif state == "set_interval":
                     try:
                         interval = int(text.strip())
@@ -194,9 +167,9 @@ def main():
                 waiting_for_input[chat_id] = "set_channel"
                 send_message(chat_id, "یوزرنیم کانال را با @ وارد کنید:")
 
-            elif text == "🔗 تنظیم لینک گیت‌هاب":
-                waiting_for_input[chat_id] = "set_github"
-                send_message(chat_id, "لینک مخزن گیت‌هاب را وارد کنید:")
+            elif text == "🔗 تنظیم لینک فایل کانفیگ":
+                waiting_for_input[chat_id] = "set_config_url"
+                send_message(chat_id, "لینک مستقیم فایل txt کانفیگ را وارد کنید:")
 
             elif text == "🎞 بارگذاری ویدیو آموزش":
                 markup = {
@@ -222,7 +195,7 @@ def main():
                 send_message(chat_id, "بازه زمانی بین تست‌ها را (برحسب ساعت) وارد کنید:")
 
             elif text == "👥 مشاهده تنظیمات":
-                msg = f"📢 کانال: {data['join_channel']}\n🔗 گیت‌هاب: {data['github_url']}\n⏰ بازه تست: {data['ping_interval']} ساعت"
+                msg = f"📢 کانال: {data['join_channel']}\n🔗 لینک فایل کانفیگ: {data['config_url']}\n⏰ بازه تست: {data['ping_interval']} ساعت"
                 send_message(chat_id, msg)
 
             elif text == "📡 تست و ارسال کانفیگ":
@@ -231,5 +204,4 @@ def main():
         time.sleep(1)
 
 if __name__ == "__main__":
-    import json
     main()
