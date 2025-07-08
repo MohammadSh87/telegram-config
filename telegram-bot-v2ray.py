@@ -1,10 +1,7 @@
-
-
 import requests
 import time
 import os
 from datetime import datetime
-
 
 TOKEN = '8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA'
 ADMIN_USERNAME = 'Mohammad87killer'
