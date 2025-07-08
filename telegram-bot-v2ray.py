@@ -1,130 +1,107 @@
 
 
+
 import requests
+import zipfile
+import io
+import os
 import json
 import time
-import os
 
-# ========== تنظیمات ==========
 
 TOKEN = '8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA'
 ADMIN_USERNAME = 'Mohammad87killer'
-CHANNEL_USERNAME = '@channel'  # فقط جهت توسعه آتی
 BASE_URL = f'https://api.telegram.org/bot{TOKEN}'
-DB_FILE = 'users.json'
+GITHUB_ZIP_URL = "https://github.com/Epodonios/v2ray-configs/archive/refs/heads/main.zip"
+CONFIG_FOLDER = "v2ray-configs/v2ray-configs-main"
 
-# ========== تابع‌های کمکی ==========
-def save_users(users):
-    with open(DB_FILE, 'w') as f:
-        json.dump(users, f, indent=2)
+# دریافت آپدیت‌ها
+def get_updates(offset=None):
+    url = BASE_URL + '/getUpdates'
+    params = {'timeout': 100, 'offset': offset}
+    res = requests.get(url, params=params)
+    return res.json()
 
-def load_users():
-    if not os.path.exists(DB_FILE):
-        save_users({})
-    with open(DB_FILE, 'r') as f:
-        return json.load(f)
+# ارسال پیام
+def send_message(chat_id, text, reply_markup=None):
+    url = BASE_URL + '/sendMessage'
+    data = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
+    if reply_markup:
+        data['reply_markup'] = json.dumps(reply_markup)
+    requests.post(url, data=data)
 
-def send_message(chat_id, text, buttons=None):
-    data = {
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': 'HTML'
-    }
-    if buttons:
-        data['reply_markup'] = json.dumps({'inline_keyboard': buttons})
-    requests.post(f"{BASE_URL}/sendMessage", data=data)
+# دانلود و استخراج کانفیگ‌ها از گیت‌هاب
+def download_configs():
+    if os.path.exists(CONFIG_FOLDER):
+        return
+    r = requests.get(GITHUB_ZIP_URL)
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    z.extractall("v2ray-configs")
 
-def get_me():
-    res = requests.get(f"{BASE_URL}/getMe").json()
-    return res.get('result', {}).get('username', 'Bot')
+# استخراج لیست سرورها از فایل‌ها
+def list_configs():
+    files = [f for f in os.listdir(CONFIG_FOLDER) if f.endswith('.json')]
+    configs = []
+    for f in files:
+        try:
+            with open(os.path.join(CONFIG_FOLDER, f), "r", encoding="utf-8") as file:
+                config = json.load(file)
+                server_name = config.get('ps', f)
+                configs.append((server_name, f))
+        except:
+            continue
+    return configs
 
-# ========== ساختار دکمه‌ها ==========
-def main_buttons():
-    return [
-        [{'text': '🛍 فروشگاه', 'callback_data': 'store'}],
-        [{'text': '📊 وضعیت حساب', 'callback_data': 'status'}],
-        [{'text': '📢 درباره ما', 'callback_data': 'about'}]
-    ]
+# دریافت متن کانفیگ به‌صورت متن
+def get_config_text(filename):
+    try:
+        with open(os.path.join(CONFIG_FOLDER, filename), "r", encoding="utf-8") as file:
+            return file.read()
+    except:
+        return "خطا در خواندن فایل کانفیگ."
 
-def admin_buttons():
-    return [
-        [{'text': '📬 ارسال پیام همگانی', 'callback_data': 'broadcast'}],
-        [{'text': '📊 تعداد کاربران', 'callback_data': 'users'}]
-    ]
-
-# ========== پیام‌های پیش‌فرض ==========
-def welcome_msg(user):
-    return f"""سلام <b>{user['first_name']}</b> 👋
-
-به ربات خوش آمدی!
-از منو برای ادامه استفاده کن."""
-
-def about_msg():
-    return "رباتی ساده برای فروش کانفیگ V2Ray"
-
-def store_msg():
-    return "💥 در حال حاضر محصولی برای نمایش نیست."
-
-# ========== پردازش آپدیت ==========
-def handle_update(update, users):
-    if 'message' in update:
-        msg = update['message']
-        user_id = str(msg['from']['id'])
-        username = msg['from'].get('username', '')
-        first_name = msg['from'].get('first_name', '')
-        text = msg.get('text', '')
-
-        if user_id not in users:
-            users[user_id] = {
-                'id': user_id,
-                'first_name': first_name,
-                'username': username,
-                'joined': time.time(),
-                'ref': None
-            }
-            save_users(users)
-
-        if text == '/start':
-            send_message(user_id, welcome_msg(msg['from']), main_buttons())
-
-    elif 'callback_query' in update:
-        query = update['callback_query']
-        data = query['data']
-        user_id = str(query['from']['id'])
-
-        if data == 'about':
-            send_message(user_id, about_msg())
-        elif data == 'store':
-            send_message(user_id, store_msg())
-        elif data == 'status':
-            user = users.get(user_id, {})
-            joined = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(user.get('joined', 0)))
-            send_message(user_id, f"🆔 <b>{user_id}</b>\n👤 <b>{user.get('first_name')}</b>\n⏰ ورود: {joined}")
-        elif data == 'users' and query['from'].get('username') == ADMIN_USERNAME:
-            send_message(user_id, f"👥 تعداد کاربران: {len(users)}")
-        elif data == 'broadcast' and query['from'].get('username') == ADMIN_USERNAME:
-            send_message(user_id, "📨 پیام مورد نظر را ارسال کنید (در حال توسعه).")
-
-# ========== حلقه اصلی ==========
+# حلقه اصلی ربات
 def main():
-    print("ربات فعال شد.")
-    users = load_users()
+    print("ربات در حال اجراست...")
+    download_configs()
     last_update_id = None
 
     while True:
-        try:
-            params = {'timeout': 100, 'offset': last_update_id}
-            res = requests.get(f"{BASE_URL}/getUpdates", params=params).json()
-
-            for update in res.get('result', []):
+        updates = get_updates(last_update_id)
+        if 'result' in updates:
+            for update in updates['result']:
                 last_update_id = update['update_id'] + 1
-                handle_update(update, users)
 
-            time.sleep(1)
-        except Exception as e:
-            print("❌ خطا:", e)
-            time.sleep(3)
+                if 'message' in update:
+                    chat_id = update['message']['chat']['id']
+                    text = update['message'].get('text', '')
+
+                    if text == '/start':
+                        send_message(chat_id, "سلام! لطفا یکی از سرورهای زیر را انتخاب کنید:")
+
+                        buttons = []
+                        configs = list_configs()
+                        for name, file in configs[:10]:  # فقط ۱۰ تا اول
+                            buttons.append([{'text': name, 'callback_data': f'get_{file}'}])
+
+                        send_message(chat_id, "لیست سرورها:", {
+                            'inline_keyboard': buttons
+                        })
+
+                elif 'callback_query' in update:
+                    callback = update['callback_query']
+                    data = callback['data']
+                    chat_id = callback['message']['chat']['id']
+                    message_id = callback['message']['message_id']
+
+                    if data.startswith("get_"):
+                        filename = data[4:]
+                        config_text = get_config_text(filename)
+                        send_message(chat_id, f"<code>{config_text}</code>")
+
+        time.sleep(1)
 
 if __name__ == '__main__':
     main()
+
 
