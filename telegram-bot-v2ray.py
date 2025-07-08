@@ -293,4 +293,6 @@ def main():
 
         time.sleep(1)
 
-if __name
+if __name__ == "__main__":
+    main()
+
