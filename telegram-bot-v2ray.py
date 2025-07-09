@@ -4,8 +4,8 @@ import os
 from datetime import datetime
 import json
 
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-ADMIN_ID = 123456789  # آیدی عددی ادمین
+TOKEN = "8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA"
+ADMIN_ID = 7089528908  # آیدی عددی ادمین
 
 API_URL = f"https://api.telegram.org/bot{TOKEN}"
 OFFSET = 0
