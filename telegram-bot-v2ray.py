@@ -46,10 +46,11 @@ def send_message(chat_id, text, reply_markup=None):
 def send_document(chat_id, file_path, caption=None):
     try:
         with open(file_path, 'rb') as f:
-            data = {"chat_id": chat_id}
+            data_send = {"chat_id": chat_id}
             if caption:
-                data["caption"] = caption
-            requests.post(f"{API_URL}/sendDocument", files={"document": f}, data=data)
+                data_send["caption"] = caption
+                data_send["parse_mode"] = "HTML"
+            requests.post(f"{API_URL}/sendDocument", files={"document": f}, data=data_send)
     except Exception as e:
         print("Error in send_document:", e)
 
@@ -90,9 +91,9 @@ def test_links_and_send(chat_id):
     filename = f"valid_config_{chat_id}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write("\n".join(valid_links))
-        f.write(f"\n\n🕒 تست شده در: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    send_document(chat_id, filename)
+    caption = f"🕒 تست شده در: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n⏱ فاصله تست خودکار: {data['auto_test_interval']} دقیقه"
+    send_document(chat_id, filename, caption=caption)
     os.remove(filename)
 
 def set_channel_chat_id():
@@ -265,34 +266,55 @@ def main():
                 send_message(chat_id, f"لطفاً فایل ویدیویی {platform} را ارسال کنید:")
 
             elif text in ["📱 Android", "🍏 iOS", "💻 Windows"]:
-                platform = text.split()[1].lower()
-                file_id = data["videos"].get(platform)
-                if file_id:
-                    send_message(chat_id, f"ویدیوی آموزش {platform} آماده است.\n(قابلیت ارسال ویدیو با file_id در آینده اضافه شود)")
-                    # TODO: ارسال ویدیو با file_id در API تلگرام
+                # استخراج platform از متن (مثلاً "📱 Android" => "android")
+                if text == "📱 Android":
+                    platform = "android"
+                elif text == "🍏 iOS":
+                    platform = "ios"
+                elif text == "💻 Windows":
+                    platform = "windows"
                 else:
-                    send_message(chat_id, f"ویدیویی برای {platform} ذخیره نشده است.")
+                    platform = None
 
-            elif text == "🔗 تنظیم لینک کانفیگ" and is_admin:
-                state[chat_id] = "set_config_url"
-                send_message(chat_id, "لینک فایل کانفیگ را ارسال کنید:")
-
-            elif text == "⏱ تنظیم فاصله تست خودکار" and is_admin:
-                state[chat_id] = "set_test_interval"
-                send_message(chat_id, "فاصله تست خودکار به دقیقه (عدد) را وارد کنید:")
-
-            elif text == "⚙ تنظیم لینک کانال (جوین اجباری)" and is_admin:
-                state[chat_id] = "set_channel_link"
-                send_message(chat_id, "لینک یا آیدی کانال (مثلاً @channelusername) را ارسال کنید:")
-
-            elif text == "🔙 بازگشت به پنل مدیریت" and is_admin:
-                admin_panel(chat_id)
+                if platform:
+                    file_id = data["videos"].get(platform)
+                    if file_id:
+                        try:
+                            # ارسال ویدیو از روی file_id
+                            payload = {
+                                "chat_id": chat_id,
+                                "video": file_id
+                            }
+                            resp = requests.post(f"{API_URL}/sendVideo", json=payload)
+                            if not resp.json().get("ok"):
+                                send_message(chat_id, f"خطا در ارسال ویدیو {platform}.")
+                        except Exception as e:
+                            send_message(chat_id, f"خطا در ارسال ویدیو {platform}.")
+                    else:
+                        send_message(chat_id, f"🚫 ویدیوی آموزش {platform} ذخیره نشده است.")
+                else:
+                    send_message(chat_id, "❌ پلتفرم نامعتبر است.")
 
             elif text == "🔙 بازگشت به پنل کاربر":
                 user_panel(chat_id)
 
+            elif text == "🔙 بازگشت به پنل مدیریت" and is_admin:
+                admin_panel(chat_id)
+
+            elif text == "🔗 تنظیم لینک کانفیگ" and is_admin:
+                state[chat_id] = "set_config_url"
+                send_message(chat_id, "لطفاً لینک کانفیگ را ارسال کنید:")
+
+            elif text == "⏱ تنظیم فاصله تست خودکار" and is_admin:
+                state[chat_id] = "set_test_interval"
+                send_message(chat_id, "لطفاً فاصله تست خودکار را (بر حسب دقیقه) ارسال کنید:")
+
+            elif text == "⚙ تنظیم لینک کانال (جوین اجباری)" and is_admin:
+                state[chat_id] = "set_channel_link"
+                send_message(chat_id, "لطفاً لینک کانال را با @ وارد کنید (مثلاً @channelusername):")
+
             else:
-                send_message(chat_id, "دستور نامعتبر یا نا آشناست.")
+                send_message(chat_id, "دستور ناشناخته یا دسترسی ندارید.")
 
         time.sleep(1)
 
