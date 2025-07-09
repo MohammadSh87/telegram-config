@@ -1,197 +1,161 @@
+import json
 import requests
-import os
-from datetime import datetime
+import threading
+import time
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 
 TOKEN = "8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA"
-ADMIN_ID = 2075973663  # شناسه ادمین را اینجا بگذارید
-URL = f"https://api.telegram.org/bot{TOKEN}/"
+ADMIN_ID = 2075973663
 
-data = {
-    "config_urls": [],
-    "auto_test_interval": 0,
-    "channel_username": "",
-    "force_join": False,
-    # بقیه تنظیمات شما اینجا می‌ماند بدون تغییر
-}
-
+data_file = 'data.json'
 state = {}
 
-def get_updates(offset=None):
-    params = {"timeout": 100, "offset": offset}
-    response = requests.get(URL + "getUpdates", params=params)
-    if response.status_code == 200:
-        return response.json().get("result", [])
-    return []
-
-def send_message(chat_id, text, reply_markup=None):
-    params = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    if reply_markup:
-        params["reply_markup"] = reply_markup
-    requests.post(URL + "sendMessage", json=params)
-
-def send_document(chat_id, filepath, caption=None):
-    with open(filepath, "rb") as f:
-        files = {"document": f}
-        data_ = {"chat_id": chat_id}
-        if caption:
-            data_["caption"] = caption
-            data_["parse_mode"] = "Markdown"
-        requests.post(URL + "sendDocument", data=data_, files=files)
-
-def is_user_admin(user_id):
-    return user_id == ADMIN_ID
-
-def send_config_links_buttons(chat_id):
-    if not data["config_urls"]:
-        send_message(chat_id, "هیچ لینکی ذخیره نشده است.")
-        return
-    keyboard = [[f"لینک {i+1}"] for i in range(len(data["config_urls"]))]
-    reply_markup = {
-        "keyboard": keyboard,
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
-    send_message(chat_id, "لطفاً لینک مورد نظر را انتخاب کنید:", reply_markup=reply_markup)
-
-def test_links_and_send(chat_id, url):
-    send_message(chat_id, f"⏳ در حال دریافت و تست لینک‌ها از:\n{url}")
+# ---------- Utility ----------
+def load_data():
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        content = response.text
-    except Exception:
-        send_message(chat_id, "❌ دریافت فایل با خطا مواجه شد.")
-        return
+        with open(data_file, 'r') as f:
+            return json.load(f)
+    except:
+        return {"config_urls": []}
 
-    lines = content.strip().splitlines()
-    valid_links = []
-    for link in lines:
-        link = link.strip()
-        if not link:
-            continue
+def save_data(data):
+    with open(data_file, 'w') as f:
+        json.dump(data, f)
+
+def send_main_menu(chat_id, context):
+    keyboard = [
+        [KeyboardButton("📥 دریافت کانفیگ سالم")],
+        [KeyboardButton("➕ افزودن لینک کانفیگ"), KeyboardButton("🗑️ حذف لینک کانفیگ")],
+        [KeyboardButton("🔗 نمایش لینک‌ها")]
+    ]
+    context.bot.send_message(chat_id, "پنل مدیریت:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+
+def is_admin(update: Update):
+    return update.effective_user.username == ADMIN_USERNAME
+
+# ---------- Bot Logic ----------
+def start(update: Update, context: CallbackContext):
+    user = update.effective_user
+    update.message.reply_text(f"سلام {user.first_name}!")
+    if is_admin(update):
+        send_main_menu(update.message.chat_id, context)
+
+def handle_text(update: Update, context: CallbackContext):
+    chat_id = update.message.chat_id
+    text = update.message.text.strip()
+    data = load_data()
+
+    if chat_id in state:
+        current_state = state[chat_id]
+        if current_state == "add":
+            data["config_urls"].append(text)
+            save_data(data)
+            update.message.reply_text("✅ لینک ذخیره شد.")
+            del state[chat_id]
+            return
+        elif current_state == "remove":
+            try:
+                index = int(text) - 1
+                removed = data["config_urls"].pop(index)
+                save_data(data)
+                update.message.reply_text(f"✅ لینک حذف شد:\n{removed}")
+            except:
+                update.message.reply_text("شماره نامعتبر است.")
+            del state[chat_id]
+            return
+
+    # دستورات مدیریتی
+    if text == "➕ افزودن لینک کانفیگ" and is_admin(update):
+        state[chat_id] = "add"
+        update.message.reply_text("لینک را ارسال کنید:")
+    elif text == "🗑️ حذف لینک کانفیگ" and is_admin(update):
+        if not data["config_urls"]:
+            update.message.reply_text("⛔️ لیست خالی است.")
+        else:
+            msg = "\n".join([f"{i+1}. {url}" for i, url in enumerate(data["config_urls"])])
+            update.message.reply_text(f"لینک‌ها:\n{msg}\nشماره لینک برای حذف را بفرست:")
+            state[chat_id] = "remove"
+    elif text == "🔗 نمایش لینک‌ها" and is_admin(update):
+        if not data["config_urls"]:
+            update.message.reply_text("⛔️ هیچ لینکی ذخیره نشده.")
+        else:
+            msg = "\n".join([f"{i+1}. {url}" for i, url in enumerate(data["config_urls"])])
+            update.message.reply_text(f"📄 لینک‌ها:\n{msg}")
+    elif text == "📥 دریافت کانفیگ سالم":
+        if not data["config_urls"]:
+            update.message.reply_text("⛔️ هیچ لینکی ذخیره نشده.")
+        else:
+            buttons = [
+                [InlineKeyboardButton(f"لینک {i+1}", callback_data=f"check_{i}")]
+                for i in range(len(data["config_urls"]))
+            ]
+            context.bot.send_message(chat_id, "🌐 یکی از لینک‌ها را انتخاب کن:", reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        update.message.reply_text("دستور نامعتبر است.")
+
+def handle_callback(update: Update, context: CallbackContext):
+    query = update.callback_query
+    chat_id = query.message.chat_id
+    query.answer()
+
+    if query.data.startswith("check_"):
+        index = int(query.data.split("_")[1])
+        data = load_data()
+        if index >= len(data["config_urls"]):
+            query.edit_message_text("❌ لینک وجود ندارد.")
+            return
+        url = data["config_urls"][index]
+        query.edit_message_text("⏳ در حال دریافت و تست کانفیگ‌ها...")
+
         try:
-            if link.startswith("http"):
-                r = requests.get(link, timeout=3)
-                if r.status_code == 200:
-                    valid_links.append(link)
-            elif any(link.startswith(proto) for proto in ["vmess://", "vless://", "ss://", "trojan://", "ssr://"]):
-                valid_links.append(link)
+            response = requests.get(url, timeout=10)
+            raw = response.text.strip()
+            configs = [line for line in raw.splitlines() if line.startswith("vmess://") or line.startswith("vless://") or line.startswith("trojan://")]
+
+            healthy = []
+            for conf in configs:
+                if test_config(conf):
+                    healthy.append(conf)
+
+            if not healthy:
+                context.bot.send_message(chat_id, "⛔️ هیچ کانفیگ سالمی پیدا نشد.")
+            else:
+                msg = "\n".join(healthy)
+                context.bot.send_message(chat_id, f"✅ کانفیگ‌های سالم ({len(healthy)}):\n\n{msg}")
         except:
-            continue
+            context.bot.send_message(chat_id, "❌ خطا در دریافت کانفیگ‌ها.")
 
-    if not valid_links:
-        send_message(chat_id, "❌ هیچ لینکی سالم نبود.")
-        return
+# ---------- Ping Test ----------
+import subprocess
+import base64
+from urllib.parse import urlparse
 
-    filename = f"valid_config_{chat_id}.txt"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write("\n".join(valid_links))
+def test_config(link):
+    try:
+        if link.startswith("vmess://"):
+            raw = link[8:]
+            decoded = base64.b64decode(raw + '=' * (-len(raw) % 4)).decode('utf-8')
+            server = json.loads(decoded).get("add")
+        else:
+            server = urlparse(link).hostname
 
-    caption = f"🕒 تست شده در: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n⏱ فاصله تست خودکار: {data['auto_test_interval']} دقیقه"
-    send_document(chat_id, filename, caption=caption)
-    os.remove(filename)
+        if not server:
+            return False
 
-def main():
-    OFFSET = None
-    while True:
-        updates = get_updates(OFFSET)
-        for update in updates:
-            OFFSET = update["update_id"] + 1
-            message = update.get("message")
-            if not message:
-                continue
-            chat_id = message["chat"]["id"]
-            text = message.get("text", "")
-            user_id = message["from"]["id"]
-            is_admin = is_user_admin(user_id)
+        result = subprocess.run(["ping", "-c", "1", "-W", "1", server], stdout=subprocess.DEVNULL)
+        return result.returncode == 0
+    except:
+        return False
 
-            # وضعیت اضافه کردن لینک
-            if chat_id in state:
-                action = state.pop(chat_id)
-                if action == "add_config_url" and is_admin:
-                    url = text.strip()
-                    if url.startswith("http"):
-                        data["config_urls"].append(url)
-                        send_message(chat_id, "✅ لینک اضافه شد.")
-                    else:
-                        send_message(chat_id, "❌ لینک نامعتبر است.")
-                    continue
-                elif action == "remove_config_url" and is_admin:
-                    try:
-                        idx = int(text.strip()) - 1
-                        if 0 <= idx < len(data["config_urls"]):
-                            removed = data["config_urls"].pop(idx)
-                            send_message(chat_id, f"✅ لینک حذف شد:\n{removed}")
-                        else:
-                            send_message(chat_id, "❌ شماره نامعتبر است.")
-                    except:
-                        send_message(chat_id, "❌ لطفاً شماره لینک را به صورت عدد وارد کنید.")
-                    continue
+# ---------- Run ----------
+updater = Updater(TOKEN, use_context=True)
+dp = updater.dispatcher
 
-            # دستورات پنل ادمین
-            if is_admin:
-                if text == "➕ افزودن لینک کانفیگ":
-                    state[chat_id] = "add_config_url"
-                    send_message(chat_id, "لطفاً لینک کانفیگ را ارسال کنید:")
-                    continue
-                elif text == "🗑️ حذف لینک کانفیگ":
-                    if not data["config_urls"]:
-                        send_message(chat_id, "لیست لینک‌ها خالی است.")
-                    else:
-                        text_links = "\n".join([f"{i+1}. {url}" for i, url in enumerate(data["config_urls"])])
-                        send_message(chat_id, f"شماره لینک مورد نظر برای حذف را ارسال کنید:\n{text_links}")
-                        state[chat_id] = "remove_config_url"
-                    continue
-                elif text == "🔗 نمایش لینک‌ها":
-                    if not data["config_urls"]:
-                        send_message(chat_id, "هیچ لینکی ذخیره نشده است.")
-                    else:
-                        text_links = "\n".join([f"{i+1}. {url}" for i, url in enumerate(data["config_urls"])])
-                        send_message(chat_id, f"لینک‌های ذخیره شده:\n{text_links}")
-                    continue
-                elif text == "📥 دریافت کانفیگ سالم":
-                    send_config_links_buttons(chat_id)
-                    continue
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+dp.add_handler(CallbackQueryHandler(handle_callback))
 
-                # بقیه دستورات ادمین (مثلاً تنظیمات فاصله تست و کانال) اینجا بدون تغییر می‌آیند
-                # مثلا:
-                if text.startswith("⏱ تنظیم فاصله تست خودکار "):
-                    try:
-                        minutes = int(text.split()[-1])
-                        data["auto_test_interval"] = minutes
-                        send_message(chat_id, f"✅ فاصله تست خودکار روی {minutes} دقیقه تنظیم شد.")
-                    except:
-                        send_message(chat_id, "❌ مقدار معتبر وارد کنید.")
-                    continue
-                if text.startswith("🔔 تنظیم کانال "):
-                    channel = text.split()[-1]
-                    data["channel_username"] = channel
-                    send_message(chat_id, f"✅ کانال به {channel} تنظیم شد.")
-                    continue
-                if text == "🔒 فعال/غیرفعال اجباری جوین":
-                    data["force_join"] = not data["force_join"]
-                    send_message(chat_id, f"✅ حالت اجباری جوین {'فعال' if data['force_join'] else 'غیرفعال'} شد.")
-                    continue
-
-            # کاربر عادی یا ادمین که لینک را انتخاب کرده
-            if text.startswith("لینک "):
-                try:
-                    idx = int(text.split()[1]) - 1
-                    if 0 <= idx < len(data["config_urls"]):
-                        test_links_and_send(chat_id, data["config_urls"][idx])
-                    else:
-                        send_message(chat_id, "❌ لینک نامعتبر است.")
-                except:
-                    send_message(chat_id, "❌ فرمت لینک انتخابی نامعتبر است.")
-                continue
-
-            # دستورات عمومی دیگر (مانند استارت، دستور جوین، تست، و غیره) بدون تغییر اینجا قرار بگیرند
-            if text == "/start":
-                send_message(chat_id, "سلام! برای دریافت کانفیگ سالم، از منوی دریافت استفاده کنید.")
-                continue
-
-            # پیام پیش‌فرض برای دستور نامشخص
-            send_message(chat_id, "دستور نامشخص است. لطفاً از منوی موجود استفاده کنید.")
-
-if __name__ == "__main__":
-    main()
+print("ربات اجرا شد.")
+updater.start_polling()
+updater.idle()
