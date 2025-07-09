@@ -3,6 +3,7 @@ import time
 import os
 from datetime import datetime
 import json
+import threading
 
 TOKEN = "8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA"
 ADMIN_ID = 7089528908
@@ -13,15 +14,19 @@ OFFSET = 0
 state = {}
 data = {
     "config_url": "",
-    "auto_test_interval": 0,
+    "auto_test_interval": 0,  # دقیقه
     "videos": {
         "android": None,
         "ios": None,
         "windows": None
     },
     "join_channel_username": "",  # به صورت @channelusername
-    "join_channel_chat_id": None  # chat_id واقعی کانال بعد از گرفتن
+    "join_channel_chat_id": None,  # chat_id واقعی کانال
+    "last_valid_config_file": None,  # مسیر فایل ذخیره شده آخرین کانفیگ سالم
+    "last_test_time": None  # زمان آخرین تست به صورت datetime
 }
+
+lock = threading.Lock()
 
 def get_updates():
     global OFFSET
@@ -46,26 +51,66 @@ def send_message(chat_id, text, reply_markup=None):
 def send_document(chat_id, file_path, caption=None):
     try:
         with open(file_path, 'rb') as f:
-            data = {"chat_id": chat_id}
+            data_send = {"chat_id": chat_id}
             if caption:
-                data["caption"] = caption
-            requests.post(f"{API_URL}/sendDocument", files={"document": f}, data=data)
+                data_send["caption"] = caption
+                data_send["parse_mode"] = "HTML"
+            requests.post(f"{API_URL}/sendDocument", files={"document": f}, data=data_send)
     except Exception as e:
         print("Error in send_document:", e)
 
-def test_links_and_send(chat_id):
-    send_message(chat_id, "⏳ در حال دریافت و تست لینک‌ها...")
+def set_channel_chat_id():
+    username = data["join_channel_username"]
+    if not username:
+        return False
+    if username.startswith("@"):
+        username = username[1:]
+    try:
+        resp = requests.get(f"{API_URL}/getChat", params={"chat_id": f"@{username}"}, timeout=5)
+        result = resp.json()
+        if result.get("ok"):
+            chat_id = result["result"]["id"]
+            data["join_channel_chat_id"] = chat_id
+            return True
+    except Exception as e:
+        print("خطا در دریافت chat_id کانال:", e)
+    return False
+
+def check_join_channel(user_id):
+    if data["join_channel_chat_id"] is None:
+        if not set_channel_chat_id():
+            # اگر chat_id کانال مشخص نبود، پیش‌فرض اجازه می‌دهیم
+            return True
+
+    channel_chat_id = data["join_channel_chat_id"]
+    try:
+        resp = requests.get(f"{API_URL}/getChatMember", params={
+            "chat_id": channel_chat_id,
+            "user_id": user_id
+        }, timeout=5)
+        result = resp.json()
+        if result.get("ok"):
+            status = result["result"]["status"]
+            if status in ["member", "administrator", "creator"]:
+                return True
+    except:
+        pass
+    return False
+
+def test_links_and_save():
+    """
+    تست لینک‌ها، ذخیره لینک‌های سالم در فایل و آپدیت زمان تست.
+    بدون ارسال به کاربر (برای تست خودکار).
+    """
     url = data["config_url"]
     if not url:
-        send_message(chat_id, "❌ لینک کانفیگ تنظیم نشده است.")
-        return
+        return False, "لینک کانفیگ تنظیم نشده است."
 
     try:
         response = requests.get(url, timeout=10)
         content = response.text
     except Exception:
-        send_message(chat_id, "❌ دریافت فایل با خطا مواجه شد.")
-        return
+        return False, "دریافت فایل با خطا مواجه شد."
 
     lines = content.strip().splitlines()
     valid_links = []
@@ -84,65 +129,47 @@ def test_links_and_send(chat_id):
             pass
 
     if not valid_links:
-        send_message(chat_id, "❌ هیچ لینکی سالم نبود.")
-        return
+        return False, "هیچ لینکی سالم نبود."
 
-    filename = f"valid_config_{chat_id}.txt"
+    filename = "valid_config.txt"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write("\n".join(valid_links))
-        f.write(f"\n\n🕒 تست شده در: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    send_document(chat_id, filename)
-    os.remove(filename)
+    with lock:
+        data["last_valid_config_file"] = filename
+        data["last_test_time"] = datetime.now()
 
-def set_channel_chat_id():
+    return True, "تست لینک‌ها موفق بود."
+
+def send_valid_config(chat_id):
+    with lock:
+        filename = data["last_valid_config_file"]
+        last_test_time = data["last_test_time"]
+
+    if not filename or not os.path.exists(filename):
+        send_message(chat_id, "❌ هنوز هیچ کانفیگ سالمی موجود نیست. لطفاً چند لحظه دیگر تلاش کنید.")
+        return
+
+    caption = ""
+    if last_test_time:
+        caption = f"🕒 زمان آخرین تست: {last_test_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    send_document(chat_id, filename, caption=caption)
+
+def auto_test_worker():
     """
-    با استفاده از join_channel_username که به شکل @channelusername است،
-    chat_id واقعی کانال را می‌گیرد و ذخیره می‌کند.
+    اجرای تست خودکار دوره‌ای بر اساس زمان تعیین شده توسط ادمین.
     """
-    username = data["join_channel_username"]
-    if not username:
-        return False
-
-    if username.startswith("@"):
-        username = username[1:]
-
-    try:
-        resp = requests.get(f"{API_URL}/getChat", params={"chat_id": f"@{username}"}, timeout=5)
-        result = resp.json()
-        if result.get("ok"):
-            chat_id = result["result"]["id"]
-            data["join_channel_chat_id"] = chat_id
-            return True
-    except Exception as e:
-        print("خطا در دریافت chat_id کانال:", e)
-    return False
-
-def check_join_channel(user_id):
-    """
-    بررسی می‌کند کاربر عضو کانال است یا خیر با استفاده از chat_id کانال ذخیره شده.
-    اگر join_channel_chat_id وجود نداشته باشد تلاش می‌کند آن را دریافت کند.
-    """
-    if data["join_channel_chat_id"] is None:
-        if not set_channel_chat_id():
-            # اگر chat_id کانال مشخص نبود، به عنوان پیش‌فرض اجازه می‌دهیم
-            return True
-
-    channel_chat_id = data["join_channel_chat_id"]
-
-    try:
-        resp = requests.get(f"{API_URL}/getChatMember", params={
-            "chat_id": channel_chat_id,
-            "user_id": user_id
-        }, timeout=5)
-        result = resp.json()
-        if result.get("ok"):
-            status = result["result"]["status"]
-            if status in ["member", "administrator", "creator"]:
-                return True
-    except:
-        pass
-    return False
+    while True:
+        interval = data.get("auto_test_interval", 0)
+        if interval > 0:
+            success, msg = test_links_and_save()
+            if success:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] تست خودکار موفق بود.")
+            else:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] خطا در تست خودکار: {msg}")
+            time.sleep(interval * 60)
+        else:
+            time.sleep(10)  # اگر زمان تست صفر است، هر 10 ثانیه چک کن
 
 def admin_panel(chat_id):
     markup = {
@@ -171,6 +198,10 @@ def user_panel(chat_id):
 def main():
     global OFFSET
     print("ربات فعال شد...")
+
+    # اجرای تست خودکار در یک Thread جدا
+    threading.Thread(target=auto_test_worker, daemon=True).start()
+
     while True:
         updates = get_updates()
         for update in updates:
@@ -184,7 +215,7 @@ def main():
             user_id = message["from"]["id"]
             is_admin = (user_id == ADMIN_ID)
 
-            # اگر کاربر عادی است و جوین اجباری فعال است
+            # جوین اجباری اگر فعال و کاربر عادی
             if not is_admin and data.get("join_channel_username"):
                 if not check_join_channel(user_id):
                     send_message(chat_id,
@@ -208,7 +239,7 @@ def main():
 
                 elif action == "set_channel_link" and is_admin:
                     data["join_channel_username"] = text.strip()
-                    data["join_channel_chat_id"] = None  # هر بار باید دوباره chat_id گرفته شود
+                    data["join_channel_chat_id"] = None
                     if set_channel_chat_id():
                         send_message(chat_id, f"✅ لینک کانال ذخیره و chat_id گرفته شد: {data['join_channel_chat_id']}")
                     else:
@@ -220,81 +251,68 @@ def main():
                     if video:
                         file_id = video["file_id"]
                         data["videos"][platform] = file_id
-                        send_message(chat_id, f"✅ ویدیو {platform} ذخیره شد.")
+                        send_message(chat_id, f"✅ ویدیوی {platform} ذخیره شد.")
                     else:
-                        send_message(chat_id, "❌ فایل ویدیویی پیدا نشد.")
+                        send_message(chat_id, "❌ لطفاً یک ویدیوی معتبر ارسال کنید.")
+
+                else:
+                    send_message(chat_id, "❌ دستور نامشخص.")
+
                 continue
 
-            # دستورات عمومی
+            # دستورات اصلی
             if text == "/start":
                 if is_admin:
                     admin_panel(chat_id)
                 else:
                     user_panel(chat_id)
 
-            elif text == "📥 دریافت کانفیگ سالم":
-                test_links_and_send(chat_id)
+            elif text == "🔗 تنظیم لینک کانفیگ" and is_admin:
+                send_message(chat_id, "لطفاً لینک کانفیگ را ارسال کنید:")
+                state[chat_id] = "set_config_url"
 
-            elif text == "🎥 دریافت آموزش":
-                markup = {
-                    "keyboard": [
-                        ["📱 Android", "🍏 iOS"],
-                        ["💻 Windows"],
-                        ["🔙 بازگشت به پنل کاربر"]
-                    ],
-                    "resize_keyboard": True,
-                    "one_time_keyboard": False
-                }
-                send_message(chat_id, "لطفاً پلتفرم مورد نظر را انتخاب کنید:", reply_markup=markup)
+            elif text == "⏱ تنظیم فاصله تست خودکار" and is_admin:
+                send_message(chat_id, "فاصله زمانی تست خودکار (به دقیقه) را وارد کنید (۰ برای غیرفعال کردن):")
+                state[chat_id] = "set_test_interval"
+
+            elif text == "⚙ تنظیم لینک کانال (جوین اجباری)" and is_admin:
+                send_message(chat_id, "آیدی کانال را به صورت @channelusername ارسال کنید:")
+                state[chat_id] = "set_channel_link"
+
+            elif text == "📥 دریافت کانفیگ سالم":
+                send_valid_config(chat_id)
 
             elif text == "📤 ارسال آموزش" and is_admin:
                 markup = {
                     "keyboard": [
-                        ["آپلود Android", "آپلود iOS"],
-                        ["آپلود Windows"],
-                        ["🔙 بازگشت به پنل مدیریت"]
+                        ["آموزش اندروید", "آموزش iOS", "آموزش ویندوز"],
+                        ["بازگشت"]
                     ],
                     "resize_keyboard": True,
-                    "one_time_keyboard": False
+                    "one_time_keyboard": True
                 }
-                send_message(chat_id, "پلتفرم برای آپلود آموزش:", reply_markup=markup)
+                send_message(chat_id, "لطفاً آموزش مورد نظر را انتخاب کنید:", reply_markup=markup)
 
-            elif text.startswith("آپلود ") and is_admin:
-                platform = text.split(" ")[1].lower()
-                state[chat_id] = f"upload_video_{platform}"
-                send_message(chat_id, f"لطفاً فایل ویدیویی {platform} را ارسال کنید:")
-
-            elif text in ["📱 Android", "🍏 iOS", "💻 Windows"]:
-                platform = text.split()[1].lower()
+            elif text in ["آموزش اندروید", "آموزش iOS", "آموزش ویندوز"] and is_admin:
+                platform = text.split()[-1].lower()
                 file_id = data["videos"].get(platform)
                 if file_id:
-                    send_message(chat_id, f"ویدیوی آموزش {platform} آماده است.\n(قابلیت ارسال ویدیو با file_id در آینده اضافه شود)")
-                    # TODO: ارسال ویدیو با file_id در API تلگرام
+                    # ارسال ویدیو از file_id
+                    payload = {
+                        "chat_id": chat_id,
+                        "video": file_id,
+                        "caption": f"ویدیوی آموزش {platform}",
+                        "parse_mode": "HTML"
+                    }
+                    requests.post(f"{API_URL}/sendVideo", data=payload)
                 else:
-                    send_message(chat_id, f"ویدیویی برای {platform} ذخیره نشده است.")
+                    send_message(chat_id, f"❌ ویدیویی برای {platform} ثبت نشده است.")
 
-            elif text == "🔗 تنظیم لینک کانفیگ" and is_admin:
-                state[chat_id] = "set_config_url"
-                send_message(chat_id, "لینک فایل کانفیگ را ارسال کنید:")
-
-            elif text == "⏱ تنظیم فاصله تست خودکار" and is_admin:
-                state[chat_id] = "set_test_interval"
-                send_message(chat_id, "فاصله تست خودکار به دقیقه (عدد) را وارد کنید:")
-
-            elif text == "⚙ تنظیم لینک کانال (جوین اجباری)" and is_admin:
-                state[chat_id] = "set_channel_link"
-                send_message(chat_id, "آیدی کانال را به صورت @username ارسال کنید:")
-
-            elif text == "🔙 بازگشت به پنل کاربر":
-                user_panel(chat_id)
-
-            elif text == "🔙 بازگشت به پنل مدیریت" and is_admin:
+            elif text == "بازگشت" and is_admin:
                 admin_panel(chat_id)
 
             else:
-                send_message(chat_id, "دستور نامعتبر است.")
-
-        time.sleep(1)
+                send_message(chat_id, "دستور نامشخص یا مجاز نیست.")
 
 if __name__ == "__main__":
     main()
