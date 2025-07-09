@@ -5,7 +5,7 @@ from datetime import datetime
 import json
 
 TOKEN = "8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA"
-ADMIN_ID = 7089528908
+ADMIN_ID = 708952890
 
 API_URL = f"https://api.telegram.org/bot{TOKEN}"
 OFFSET = 0
