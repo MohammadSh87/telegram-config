@@ -164,7 +164,7 @@ def admin_panel(chat_id):
         "keyboard": [
             ["➕ افزودن لینک کانفیگ", "📝 ویرایش لینک کانفیگ"],
             ["🗑 حذف لینک کانفیگ", "📋 لیست لینک‌ها"],
-            ["📥 دریافت کانفیگ سالم"],
+            ["📥 دریافت کانفیگ سالم"],  # این تنها دکمه‌ای است که تست انجام می‌دهد
             ["📤 ارسال آموزش"],
             ["⏱ تنظیم فاصله تست خودکار"],
             ["⚙ تنظیم لینک کانال (جوین اجباری)"]
@@ -242,6 +242,9 @@ def main():
                 if action == "add_config" and is_admin:
                     # دریافت نام کانفیگ
                     config_name = text.strip()
+                    if config_name in data["config_urls"]:
+                        send_message(chat_id, "⚠️ این نام قبلاً استفاده شده است. لطفاً نام دیگری انتخاب کنید.")
+                        continue
                     state[chat_id] = ("add_config_url", config_name)
                     send_message(chat_id, f"لطفاً لینک کانفیگ را برای نام '{config_name}' ارسال کنید:")
                     continue
@@ -253,7 +256,7 @@ def main():
                     data["config_urls"][config_name] = config_url
                     save_config_links()
                     state.pop(chat_id)
-                    send_message(chat_id, f"✅ لینک کانفیگ با نام '{config_name}' اضافه شد.")
+                    send_message(chat_id, f"✅ لینک کانفیگ با نام '{config_name}' با موفقیت ذخیره شد.")
                     admin_panel(chat_id)
                     continue
                 
@@ -281,7 +284,7 @@ def main():
                     data["config_urls"][new_name] = new_url
                     save_config_links()
                     state.pop(chat_id)
-                    send_message(chat_id, f"✅ لینک کانفیگ با نام '{new_name}' به‌روزرسانی شد.")
+                    send_message(chat_id, f"✅ لینک کانفیگ با نام '{new_name}' با موفقیت به‌روزرسانی شد.")
                     admin_panel(chat_id)
                     continue
                 
@@ -289,7 +292,7 @@ def main():
                     try:
                         interval = int(text)
                         data["auto_test_interval"] = interval
-                        send_message(chat_id, f"✅ فاصله تست ذخیره شد: {interval} دقیقه")
+                        send_message(chat_id, f"✅ فاصله تست خودکار ذخیره شد: {interval} دقیقه")
                     except:
                         send_message(chat_id, "❌ عدد معتبر نیست.")
                     state.pop(chat_id)
@@ -326,7 +329,7 @@ def main():
 
             elif text == "➕ افزودن لینک کانفیگ" and is_admin:
                 state[chat_id] = ("add_config",)
-                send_message(chat_id, "لطفاً یک نام برای لینک کانفیگ جدید وارد کنید:")
+                send_message(chat_id, "لطفاً یک نام منحصر به فرد برای لینک کانفیگ جدید وارد کنید:")
 
             elif text == "📝 ویرایش لینک کانفیگ" and is_admin:
                 show_config_list(chat_id, action="edit")
@@ -347,7 +350,7 @@ def main():
                 if config_name in data["config_urls"]:
                     del data["config_urls"][config_name]
                     save_config_links()
-                    send_message(chat_id, f"✅ لینک با نام '{config_name}' حذف شد.")
+                    send_message(chat_id, f"✅ لینک با نام '{config_name}' با موفقیت حذف شد.")
                     admin_panel(chat_id)
                 else:
                     send_message(chat_id, "❌ لینک مورد نظر یافت نشد.")
