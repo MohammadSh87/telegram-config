@@ -7,8 +7,7 @@ import subprocess
 
 TOKEN = "8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA"
 ADMIN_ID = 2075973663
-API_URL = f'https://api.telegram.org/bot{TOKEN}'  # توسط شما تنظیم شود
-JOIN_CHANNEL = ""  # توسط ادمین در پنل تنظیم می‌شود
+API_URL = f'https://api.telegram.org/bot{TOKEN}'
 
 DATA_FILE = "data.json"
 USERS_FILE = "users.json"
@@ -74,9 +73,19 @@ def send_document(chat_id, file_path, caption=None):
             params["caption"] = caption
         telegram_request("sendDocument", params, files={"document": f})
 
-def check_user_joined_channel(user_id, channel_username):
+def check_user_joined_channel(user_id, channel):
+    """
+    channel می‌تواند آیدی عددی یا نام کاربری کانال با @ باشد
+    """
     try:
-        res = requests.get(f"https://api.telegram.org/bot{TOKEN}/getChatMember?chat_id={channel_username}&user_id={user_id}").json()
+        # اگر channel عدد است (آیدی)، به صورت عدد بفرستید
+        try:
+            chat_id = int(channel)
+        except ValueError:
+            chat_id = channel  # فرض می‌گیریم رشته‌ی @username است
+
+        res = requests.get(f"https://api.telegram.org/bot{TOKEN}/getChatMember", 
+                           params={"chat_id": chat_id, "user_id": user_id}).json()
         if res["ok"]:
             status = res["result"]["status"]
             return status in ["member", "creator", "administrator"]
@@ -86,21 +95,18 @@ def check_user_joined_channel(user_id, channel_username):
 
 def ping_host(host):
     try:
-        # پینگ ۱ بار با تایم اوت ۱ ثانیه
         completed = subprocess.run(["ping", "-c", "1", "-W", "1", host], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return completed.returncode == 0
     except:
         return False
 
 def extract_configs_from_link(link):
-    # فرض بر این است لینک فایل متنی یا json کانفیگ‌هاست که باید دانلود و ذخیره شود
     try:
         r = requests.get(link, timeout=10)
         if r.status_code == 200:
             filename = os.path.join(CONFIGS_DIR, f"{int(time.time())}.conf")
             with open(filename, "wb") as f:
                 f.write(r.content)
-            # استخراج هاست‌ها از محتوا (مثال ساده: فرض هر خط یک هاست)
             hosts = []
             for line in r.text.splitlines():
                 line=line.strip()
@@ -119,7 +125,6 @@ def test_configs(hosts):
     return healthy_hosts
 
 def admin_panel(chat_id):
-    data = load_data()
     buttons = [
         [{"text": "تنظیم لینک کانفیگ", "callback_data": "set_link"}],
         [{"text": "تنظیم کانال جوین اجباری", "callback_data": "set_channel"}],
@@ -130,7 +135,6 @@ def admin_panel(chat_id):
     send_message(chat_id, "پنل ادمین:", {"inline_keyboard": buttons})
 
 def user_menu(chat_id):
-    data = load_data()
     buttons = [
         [{"text": "دریافت کانفیگ‌های سالم", "callback_data": "get_healthy_configs"}],
         [{"text": "مشاهده ویدیوهای آموزشی", "callback_data": "list_videos"}]
@@ -148,8 +152,9 @@ def handle_message(msg):
         users[str(user_id)] = {"joined": False}
         save_users(users)
 
-    # بررسی جوین اجباری
-    join_channel = data.get("join_channel", "")
+    join_channel = data.get("join_channel", "").strip()
+
+    # جوین اجباری فقط زمانی فعال است که join_channel تنظیم شده باشد
     if join_channel:
         joined = check_user_joined_channel(user_id, join_channel)
         if not joined:
@@ -169,9 +174,13 @@ def handle_message(msg):
             send_message(chat_id, "لینک کانفیگ تنظیم شد.")
         elif text.startswith("/setchannel "):
             channel = text[12:].strip()
-            data["join_channel"] = channel
-            save_data(data)
-            send_message(chat_id, "کانال جوین اجباری تنظیم شد.")
+            # بررسی اینکه کانال خالی نباشد و درست تنظیم شود
+            if channel:
+                data["join_channel"] = channel
+                save_data(data)
+                send_message(chat_id, f"کانال جوین اجباری تنظیم شد: {channel}")
+            else:
+                send_message(chat_id, "لطفا یک نام کانال معتبر وارد کنید. مثلاً @YourChannel یا آیدی عددی کانال.")
         elif text.startswith("/setping "):
             try:
                 interval = int(text[9:].strip())
@@ -181,7 +190,6 @@ def handle_message(msg):
             except:
                 send_message(chat_id, "مقدار معتبر نیست.")
         elif text.startswith("/uploadvideo "):
-            # اینجا باید فایل ویدیو رو ارسال کنه (نیاز به upload جداگانه)
             send_message(chat_id, "جهت ارسال ویدیو آموزشی لطفا فایل را به صورت داکیومنت ارسال کنید.")
         else:
             send_message(chat_id, "دستور ناشناخته.")
@@ -202,7 +210,7 @@ def handle_callback(callback):
         if data_callback == "set_link":
             send_message(chat_id, "لطفا لینک فایل کانفیگ را با دستور زیر ارسال کنید:\n/setlink https://example.com/config.txt")
         elif data_callback == "set_channel":
-            send_message(chat_id, "لطفا نام کاربری کانال جوین اجباری را با دستور زیر ارسال کنید:\n/setchannel @YourChannel")
+            send_message(chat_id, "لطفا نام کاربری کانال جوین اجباری را با دستور زیر ارسال کنید:\n/setchannel @YourChannel\nیا آیدی عددی کانال را ارسال کنید.")
         elif data_callback == "set_ping_interval":
             send_message(chat_id, "لطفا زمان تست مجدد کانفیگ به ثانیه را با دستور زیر ارسال کنید:\n/setping 300")
         elif data_callback == "upload_video":
@@ -210,133 +218,67 @@ def handle_callback(callback):
         elif data_callback == "list_videos":
             videos = os.listdir(VIDEOS_DIR)
             if not videos:
-                send_message(chat_id, "هیچ ویدیویی موجود نیست.")
+                send_message(chat_id, "ویدیویی وجود ندارد.")
                 return
             text = "ویدیوهای آموزشی موجود:\n"
             for v in videos:
-                platform = v.split("_")[0]
-                text += f"- {platform}: {v}\n"
+                text += f"- {v}\n"
             send_message(chat_id, text)
-        elif data_callback == "get_healthy_configs":
-            if "config_link" not in data:
-                send_message(chat_id, "کانفیگی تنظیم نشده است.")
-                return
-            link = data["config_link"]
-            filename, hosts = extract_configs_from_link(link)
-            if not hosts:
-                send_message(chat_id, "کانفیگ معتبر نیست یا هاست یافت نشد.")
-                return
-            healthy = test_configs(hosts)
-            if not healthy:
-                send_message(chat_id, "هیچ هاست سالمی یافت نشد.")
-                return
-            # ارسال فایل کانفیگ اصلی فقط با هاست‌های سالم اصلاح شده
-            content = []
-            for h in healthy:
-                content.append(h)
-            healthy_filename = os.path.join(CONFIGS_DIR, f"healthy_{int(time.time())}.conf")
-            with open(healthy_filename, "w") as f:
-                f.write("\n".join(content))
-            send_document(chat_id, healthy_filename, "کانفیگ‌های سالم:")
         else:
-            send_message(chat_id, "گزینه نامعتبر.")
+            send_message(chat_id, "دکمه ناشناخته.")
     else:
+        # برای کاربران عادی
         if callback["data"] == "get_healthy_configs":
-            if "config_link" not in data:
+            # چک لینک کانفیگ
+            if "config_link" not in data or not data["config_link"]:
                 send_message(chat_id, "کانفیگی تنظیم نشده است.")
                 return
-            # بررسی عضویت
-            join_channel = data.get("join_channel", "")
-            if join_channel and not check_user_joined_channel(user_id, join_channel):
-                send_message(chat_id, f"لطفا ابتدا در کانال {join_channel} عضو شوید.")
-                return
-            link = data["config_link"]
-            filename, hosts = extract_configs_from_link(link)
-            if not hosts:
-                send_message(chat_id, "کانفیگ معتبر نیست یا هاست یافت نشد.")
+            join_channel = data.get("join_channel", "").strip()
+            if join_channel:
+                if not check_user_joined_channel(user_id, join_channel):
+                    send_message(chat_id, f"لطفا ابتدا در کانال {join_channel} عضو شوید.")
+                    return
+
+            send_message(chat_id, "در حال دریافت کانفیگ‌ها و تست سلامت آنها، لطفا صبر کنید...")
+            filename, hosts = extract_configs_from_link(data["config_link"])
+            if not filename or not hosts:
+                send_message(chat_id, "خطا در دریافت یا استخراج کانفیگ‌ها.")
                 return
             healthy = test_configs(hosts)
             if not healthy:
-                send_message(chat_id, "هیچ هاست سالمی یافت نشد.")
+                send_message(chat_id, "کانفیگ سالم یافت نشد.")
                 return
-            content = []
-            for h in healthy:
-                content.append(h)
-            healthy_filename = os.path.join(CONFIGS_DIR, f"healthy_{int(time.time())}.conf")
-            with open(healthy_filename, "w") as f:
-                f.write("\n".join(content))
-            send_document(chat_id, healthy_filename, "کانفیگ‌های سالم:")
+            healthy_text = "\n".join(healthy[:30])  # فقط 30 تا نشان بدهیم
+            send_message(chat_id, "کانفیگ‌های سالم:\n" + healthy_text)
         elif callback["data"] == "list_videos":
             videos = os.listdir(VIDEOS_DIR)
             if not videos:
-                send_message(chat_id, "هیچ ویدیویی موجود نیست.")
+                send_message(chat_id, "ویدیویی وجود ندارد.")
                 return
             text = "ویدیوهای آموزشی موجود:\n"
             for v in videos:
-                platform = v.split("_")[0]
-                text += f"- {platform}: {v}\n"
+                text += f"- {v}\n"
             send_message(chat_id, text)
         else:
-            send_message(chat_id, "گزینه نامعتبر.")
+            send_message(chat_id, "دکمه ناشناخته.")
 
-def handle_document(msg):
-    chat_id = msg["chat"]["id"]
-    user_id = msg["from"]["id"]
-    if "document" not in msg:
-        send_message(chat_id, "فایل ارسال نشده است.")
-        return
-    file_id = msg["document"]["file_id"]
-    file_name = msg["document"].get("file_name", "file")
-    caption = msg.get("caption", "").lower().strip()
+def process_update(update):
+    if "message" in update:
+        handle_message(update["message"])
+    elif "callback_query" in update:
+        callback = update["callback_query"]
+        handle_callback(callback)
+        # حتما جواب دادن به callback_query ضروری است:
+        telegram_request("answerCallbackQuery", {"callback_query_id": callback["id"]})
 
-    # دانلود فایل
-    res = telegram_request("getFile", {"file_id": file_id})
-    if not res["ok"]:
-        send_message(chat_id, "دانلود فایل امکان‌پذیر نیست.")
-        return
-    file_path = res["result"]["file_path"]
-    file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
-
-    r = requests.get(file_url)
-    if r.status_code != 200:
-        send_message(chat_id, "خطا در دریافت فایل.")
-        return
-
-    # ذخیره فایل
-    if user_id == ADMIN_ID:
-        # آپلود ویدیو
-        if caption in ["android", "ios", "windows"]:
-            fname = f"{caption}_{int(time.time())}_{file_name}"
-            save_path = os.path.join(VIDEOS_DIR, fname)
-            with open(save_path, "wb") as f:
-                f.write(r.content)
-            send_message(chat_id, f"ویدیوی آموزشی برای {caption} ذخیره شد.")
-        else:
-            # فرض آپلود کانفیگ نیست از طریق فایل داکیومنت
-            send_message(chat_id, "کپشن پلتفرم (android, ios, windows) را در هنگام ارسال ویدیو وارد کنید.")
-    else:
-        send_message(chat_id, "شما اجازه ارسال فایل ندارید.")
-
-def main():
-    global TOKEN, API_URL
-    # توکن را اینجا قرار دهید یا از جای دیگر بخوانید
-    TOKEN = "YOUR_BOT_TOKEN"
-    API_URL = f"https://api.telegram.org/bot{TOKEN}/"
-
+def main_loop():
     offset = None
     while True:
-        updates = get_updates(offset)
+        updates = get_updates(offset, timeout=30)
         for update in updates:
             offset = update["update_id"] + 1
-            if "message" in update:
-                msg = update["message"]
-                if "text" in msg:
-                    handle_message(msg)
-                elif "document" in msg:
-                    handle_document(msg)
-            elif "callback_query" in update:
-                handle_callback(update["callback_query"])
+            process_update(update)
         time.sleep(1)
 
 if __name__ == "__main__":
-    main()
+    main_loop()
