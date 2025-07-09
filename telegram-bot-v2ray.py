@@ -3,260 +3,156 @@ import time
 import os
 from datetime import datetime
 import json
-import base64
-import socket
-import re
 
-TOKEN = "519238488:7NO7L3DzeE6BVksqnbsXLIKVkiwT5L5tePYiTOSw"
-ADMIN_ID = 166912242
+TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+ADMIN_ID = 123456789  # آیدی عددی ادمین
 
-API_URL = f"https://tapi.bale.ai/bot{TOKEN}"
+API_URL = f"https://api.telegram.org/bot{TOKEN}"
 OFFSET = 0
 
+state = {}
 data = {
     "config_url": "",
+    "auto_test_interval": 0,
+    "videos": {
+        "android": None,
+        "ios": None,
+        "windows": None
+    },
+    "join_channel_username": "",
+    "join_channel_chat_id": None
 }
 
-# Regex برای استخراج لینک‌ها بر اساس پروتکل‌ها
-patterns = {
-    "vmess": re.compile(r'(vmess://[^\s]+)'),
-    "vless": re.compile(r'(vless://[^\s]+)'),
-    "trojan": re.compile(r'(trojan://[^\s]+)'),
-    "ss": re.compile(r'(ss://[^\s]+)'),
-    "ssr": re.compile(r'(ssr://[^\s]+)'),
-}
-
-def decode_base64(data):
-    """اصلاح padding و دیکد base64"""
-    data = data.strip()
-    missing_padding = len(data) % 4
-    if missing_padding:
-        data += '=' * (4 - missing_padding)
-    return base64.urlsafe_b64decode(data)
-
-def tcp_check(host, port, timeout=3):
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
-        sock.close()
-        return True
-    except:
-        return False
-
-def test_vmess(link):
-    # مثال vmess://base64_json
-    try:
-        b64 = link[len("vmess://"):]
-        b64 = b64.strip()
-        missing_padding = len(b64) % 4
-        if missing_padding:
-            b64 += '=' * (4 - missing_padding)
-        decoded = base64.b64decode(b64).decode('utf-8')
-        obj = json.loads(decoded)
-        host = obj.get("add")
-        port = int(obj.get("port", 0))
-        if not host or port == 0:
-            return False
-        return tcp_check(host, port)
-    except:
-        return False
-
-def test_vless(link):
-    # vless://uuid@host:port?query
-    try:
-        # حذف پیشوند vless://
-        content = link[len("vless://"):]
-        # جدا کردن بخش اصلی و پارامترها
-        if "?" in content:
-            main_part = content.split("?")[0]
-        else:
-            main_part = content
-        # format: uuid@host:port
-        if "@" not in main_part:
-            return False
-        user_host = main_part.split("@")[1]
-        if ":" not in user_host:
-            return False
-        host, port = user_host.split(":")
-        port = int(port)
-        if not host or port == 0:
-            return False
-        return tcp_check(host, port)
-    except:
-        return False
-
-def test_trojan(link):
-    # trojan://password@host:port?query
-    try:
-        content = link[len("trojan://"):]
-        # جدا کردن بخش اصلی و پارامترها
-        if "?" in content:
-            main_part = content.split("?")[0]
-        else:
-            main_part = content
-        if "@" not in main_part:
-            return False
-        passwd_host = main_part.split("@")[1]
-        if ":" not in passwd_host:
-            return False
-        host, port = passwd_host.split(":")
-        port = int(port)
-        if not host or port == 0:
-            return False
-        return tcp_check(host, port)
-    except:
-        return False
-
-def test_ss(link):
-    # ss://base64[@host:port] یا ss://base64
-    try:
-        ss_content = link[len("ss://"):]
-        # اگر به فرم ss://base64#name
-        if "#" in ss_content:
-            ss_content = ss_content.split("#")[0]
-
-        # ممکنه ss_content به شکل base64 یا base64@host:port باشه
-        # ابتدا بررسی base64 قسمت اول
-        if "@" in ss_content:
-            base64_part = ss_content.split("@")[0]
-        else:
-            base64_part = ss_content
-
-        decoded = decode_base64(base64_part).decode('utf-8')
-        # فرمت decoded معمولاً "method:password@host:port"
-        if "@" not in decoded or ":" not in decoded:
-            return False
-        host_port = decoded.split("@")[1]
-        if ":" not in host_port:
-            return False
-        host, port = host_port.split(":")
-        port = int(port)
-        if not host or port == 0:
-            return False
-        return tcp_check(host, port)
-    except:
-        return False
-
-def test_ssr(link):
-    # ssr://base64encoded
-    try:
-        b64 = link[len("ssr://"):]
-        decoded_bytes = decode_base64(b64)
-        decoded_str = decoded_bytes.decode('utf-8')
-        # فرمت decoded_str : host:port:protocol:method:obfs:base64password/?params
-        parts = decoded_str.split(":")
-        if len(parts) < 6:
-            return False
-        host = parts[0]
-        port = int(parts[1])
-        if not host or port == 0:
-            return False
-        return tcp_check(host, port)
-    except:
-        return False
-
-def test_link(link):
-    if link.startswith("vmess://"):
-        return test_vmess(link)
-    elif link.startswith("vless://"):
-        return test_vless(link)
-    elif link.startswith("trojan://"):
-        return test_trojan(link)
-    elif link.startswith("ss://"):
-        return test_ss(link)
-    elif link.startswith("ssr://"):
-        return test_ssr(link)
-    else:
-        return False
-
-def send_message(chat_id, text, reply_markup=None):
-    payload = {
-        "chat_id": chat_id,
-        "text": text
-    }
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    requests.post(f"{API_URL}/sendMessage", json=payload)
-
-def send_document(chat_id, file_path):
-    with open(file_path, 'rb') as f:
-        requests.post(f"{API_URL}/sendDocument", files={"document": f}, data={"chat_id": chat_id})
 
 def get_updates():
     global OFFSET
     try:
-        resp = requests.get(f"{API_URL}/getUpdates", params={"offset": OFFSET + 1, "timeout": 5})
-        result = resp.json()
+        response = requests.get(f"{API_URL}/getUpdates", params={"offset": OFFSET + 1, "timeout": 5})
+        result = response.json()
         if result.get("ok"):
             return result["result"]
     except:
         pass
     return []
 
+
+def send_message(chat_id, text, reply_markup=None):
+    payload = {"chat_id": chat_id, "text": text}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    requests.post(f"{API_URL}/sendMessage", json=payload)
+
+
+def send_document(chat_id, file_path):
+    with open(file_path, 'rb') as f:
+        requests.post(f"{API_URL}/sendDocument", files={"document": f}, data={"chat_id": chat_id})
+
+
 def test_links_and_send(chat_id):
     send_message(chat_id, "⏳ در حال دریافت و تست لینک‌ها...")
 
     url = data["config_url"]
-    if not url:
-        send_message(chat_id, "❌ لینک فایل تنظیم نشده است.")
-        return
-
     try:
         response = requests.get(url, timeout=10)
         content = response.text
-    except Exception as e:
-        send_message(chat_id, "❌ دریافت فایل با خطا مواجه شد.")
-        print(f"Error downloading config: {e}")
+    except:
+        send_message(chat_id, "❌ دریافت فایل کانفیگ با خطا مواجه شد.")
         return
 
-    # استخراج تمام لینک‌ها از متن بر اساس تمام پروتکل‌ها
-    found_links = []
-    for proto, pattern in patterns.items():
-        found_links.extend(pattern.findall(content))
-
-    if not found_links:
-        send_message(chat_id, "❌ لینک پراکسی در فایل پیدا نشد.")
-        return
-
+    lines = content.strip().splitlines()
     valid_links = []
-    total = len(found_links)
-    checked = 0
+    total = len(lines)
 
-    for link in found_links:
-        if test_link(link):
-            valid_links.append(link)
-        checked += 1
-        if checked % 20 == 0:
-            send_message(chat_id, f"✅ بررسی {checked} از {total} لینک...")
+    for link in lines:
+        link = link.strip()
+        if not link:
+            continue
+        try:
+            if link.startswith("http"):
+                r = requests.get(link, timeout=3)
+                if r.status_code == 200:
+                    valid_links.append(link)
+            elif any(link.startswith(proto) for proto in ["vmess://", "vless://", "ss://", "trojan://", "ssr://"]):
+                valid_links.append(link)
+        except:
+            pass
 
     if not valid_links:
-        send_message(chat_id, "❌ هیچ لینک سالمی پیدا نشد.")
+        send_message(chat_id, "❌ هیچ لینکی سالم نبود.")
         return
 
     filename = f"valid_config_{chat_id}.txt"
-    with open(filename, 'w', encoding='utf-8') as f:
+    with open(filename, "w", encoding="utf-8") as f:
         f.write("\n".join(valid_links))
-        f.write(f"\n\n📅 بررسی شده در {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        f.write(f"\n\n🕒 تست شده در: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     send_document(chat_id, filename)
     os.remove(filename)
-    send_message(chat_id, f"✅ تعداد {len(valid_links)} لینک سالم ارسال شد.")
 
-def show_admin_panel(chat_id):
+
+def set_channel_chat_id():
+    username = data["join_channel_username"]
+    if not username:
+        return False
+    if username.startswith("@"):
+        username = username[1:]
+    try:
+        resp = requests.get(f"{API_URL}/getChat", params={"chat_id": username}, timeout=5)
+        result = resp.json()
+        if result.get("ok"):
+            data["join_channel_chat_id"] = result["result"]["id"]
+            return True
+    except:
+        pass
+    return False
+
+
+def check_join_channel(user_id):
+    if data["join_channel_chat_id"] is None:
+        if not set_channel_chat_id():
+            return True  # اگر نشد، فعلاً عبور بده
+
+    try:
+        resp = requests.get(f"{API_URL}/getChatMember", params={
+            "chat_id": data["join_channel_chat_id"],
+            "user_id": user_id
+        }, timeout=5)
+        result = resp.json()
+        if result.get("ok"):
+            status = result["result"]["status"]
+            return status in ["member", "administrator", "creator"]
+    except:
+        pass
+    return False
+
+
+def admin_panel(chat_id):
     markup = {
         "keyboard": [
-            ["🔗 تنظیم لینک فایل", "📥 دریافت لینک‌های سالم"]
+            ["🔗 تنظیم لینک کانفیگ", "📥 تست دستی کانفیگ"],
+            ["📤 ارسال آموزش"],
+            ["⏱ تنظیم فاصله تست خودکار"],
+            ["⚙ تنظیم لینک کانال (جوین اجباری)"]
         ],
         "resize_keyboard": True
     }
-    send_message(chat_id, "🎛 پنل ادمین", reply_markup=markup)
+    send_message(chat_id, "🔧 پنل مدیریت", reply_markup=markup)
+
+
+def user_panel(chat_id):
+    markup = {
+        "keyboard": [
+            ["📥 دریافت کانفیگ سالم"],
+            ["🎥 دریافت آموزش"]
+        ],
+        "resize_keyboard": True
+    }
+    send_message(chat_id, "به ربات خوش آمدید!", reply_markup=markup)
+
 
 def main():
     global OFFSET
-    print("ربات در حال اجراست ...")
-    waiting = {}
-
+    print("ربات تلگرام فعال شد...")
     while True:
         updates = get_updates()
         for update in updates:
@@ -267,32 +163,116 @@ def main():
 
             chat_id = msg["chat"]["id"]
             text = msg.get("text", "")
+            user_id = msg["from"]["id"]
+            is_admin = (user_id == ADMIN_ID)
 
-            if chat_id in waiting:
-                state = waiting.pop(chat_id)
-                if state == "set_config":
+            if not is_admin and data["join_channel_username"]:
+                if not check_join_channel(user_id):
+                    send_message(chat_id,
+                        f"❗ لطفاً ابتدا عضو کانال شوید: {data['join_channel_username']}\nسپس /start را بفرستید.")
+                    continue
+
+            if chat_id in state:
+                action = state.pop(chat_id)
+                if action == "set_config_url" and is_admin:
                     data["config_url"] = text.strip()
                     send_message(chat_id, "✅ لینک ذخیره شد.")
+                elif action == "set_test_interval" and is_admin:
+                    try:
+                        interval = int(text)
+                        data["auto_test_interval"] = interval
+                        send_message(chat_id, f"✅ فاصله تست ذخیره شد: {interval} دقیقه")
+                    except:
+                        send_message(chat_id, "❌ مقدار نامعتبر است.")
+                elif action == "set_channel_link" and is_admin:
+                    data["join_channel_username"] = text.strip()
+                    data["join_channel_chat_id"] = None
+                    if set_channel_chat_id():
+                        send_message(chat_id, f"✅ لینک کانال ذخیره شد: {data['join_channel_chat_id']}")
+                    else:
+                        send_message(chat_id, "❌ دریافت chat_id ناموفق بود.")
+                elif action.startswith("upload_video_") and is_admin:
+                    platform = action.split("_")[-1]
+                    video = msg.get("video")
+                    if video:
+                        file_id = video["file_id"]
+                        data["videos"][platform] = file_id
+                        send_message(chat_id, f"✅ ویدیوی {platform} ذخیره شد.")
+                    else:
+                        send_message(chat_id, "❌ فایل ویدیویی پیدا نشد.")
                 continue
 
             if text == "/start":
-                if msg["from"]["id"] == ADMIN_ID:
-                    show_admin_panel(chat_id)
+                if is_admin:
+                    admin_panel(chat_id)
                 else:
-                    send_message(chat_id, "این ربات فقط مخصوص مدیر است.")
+                    user_panel(chat_id)
 
-            elif text == "🔗 تنظیم لینک فایل":
-                waiting[chat_id] = "set_config"
-                send_message(chat_id, "لینک فایل .txt را وارد کنید:")
+            elif text == "📥 دریافت کانفیگ سالم":
+                test_links_and_send(chat_id)
 
-            elif text == "📥 دریافت لینک‌های سالم":
-                if chat_id == ADMIN_ID:
-                    test_links_and_send(chat_id)
+            elif text == "🎥 دریافت آموزش":
+                markup = {
+                    "keyboard": [
+                        ["📱 Android", "🍏 iOS"],
+                        ["💻 Windows"],
+                        ["🔙 بازگشت به پنل کاربر"]
+                    ],
+                    "resize_keyboard": True
+                }
+                send_message(chat_id, "لطفاً پلتفرم را انتخاب کنید:", reply_markup=markup)
+
+            elif text == "📤 ارسال آموزش" and is_admin:
+                markup = {
+                    "keyboard": [
+                        ["آپلود Android", "آپلود iOS"],
+                        ["آپلود Windows"],
+                        ["🔙 بازگشت به پنل مدیریت"]
+                    ],
+                    "resize_keyboard": True
+                }
+                send_message(chat_id, "پلتفرم موردنظر برای آپلود:", reply_markup=markup)
+
+            elif text.startswith("آپلود ") and is_admin:
+                platform = text.split(" ")[1].lower()
+                state[chat_id] = f"upload_video_{platform}"
+                send_message(chat_id, f"لطفاً ویدیوی {platform} را ارسال کنید:")
+
+            elif text in ["📱 Android", "🍏 iOS", "💻 Windows"]:
+                platform = text.split()[1].lower()
+                file_id = data["videos"].get(platform)
+                if file_id:
+                    # ارسال ویدیو از طریق file_id
+                    requests.post(f"{API_URL}/sendVideo", data={
+                        "chat_id": chat_id,
+                        "video": file_id
+                    })
                 else:
-                    send_message(chat_id, "❌ شما اجازه دسترسی به این قسمت را ندارید.")
+                    send_message(chat_id, f"❌ ویدیوی {platform} موجود نیست.")
+
+            elif text == "🔗 تنظیم لینک کانفیگ" and is_admin:
+                state[chat_id] = "set_config_url"
+                send_message(chat_id, "لینک فایل کانفیگ را ارسال کنید:")
+
+            elif text == "⏱ تنظیم فاصله تست خودکار" and is_admin:
+                state[chat_id] = "set_test_interval"
+                send_message(chat_id, "عدد فاصله تست (دقیقه) را وارد کنید:")
+
+            elif text == "⚙ تنظیم لینک کانال (جوین اجباری)" and is_admin:
+                state[chat_id] = "set_channel_link"
+                send_message(chat_id, "آیدی کانال را به صورت @channel وارد کنید:")
+
+            elif text == "🔙 بازگشت به پنل کاربر":
+                user_panel(chat_id)
+
+            elif text == "🔙 بازگشت به پنل مدیریت" and is_admin:
+                admin_panel(chat_id)
+
+            else:
+                send_message(chat_id, "دستور نامعتبر است.")
 
         time.sleep(1)
 
+
 if __name__ == "__main__":
     main()
-
