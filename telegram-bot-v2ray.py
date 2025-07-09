@@ -5,14 +5,14 @@ from datetime import datetime
 import json
 
 TOKEN = "8057495132:AAESf8cO_FbIfYC4DTp8uVBKTU_ECNiTznA"
-ADMIN_ID = 2075973663
+ADMIN_ID = 7089528908
 
 API_URL = f"https://api.telegram.org/bot{TOKEN}"
 OFFSET = 0
 
 state = {}
 data = {
-    "config_url": "",
+    "config_urls": {},  # تغییر به دیکشنری برای ذخیره چندین لینک
     "auto_test_interval": 0,
     "videos": {
         "android": None,
@@ -22,6 +22,18 @@ data = {
     "join_channel_username": "",  # به صورت @channelusername
     "join_channel_chat_id": None  # chat_id واقعی کانال بعد از گرفتن
 }
+
+# بارگذاری داده‌ها از فایل JSON در صورت وجود
+try:
+    with open('config_links.json', 'r') as f:
+        data["config_urls"] = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    data["config_urls"] = {}
+
+def save_config_links():
+    """ذخیره لینک‌های کانفیگ در فایل JSON"""
+    with open('config_links.json', 'w') as f:
+        json.dump(data["config_urls"], f)
 
 def get_updates():
     global OFFSET
@@ -54,12 +66,21 @@ def send_document(chat_id, file_path, caption=None):
     except Exception as e:
         print("Error in send_document:", e)
 
-def test_links_and_send(chat_id):
+def test_links_and_send(chat_id, config_name=None):
     send_message(chat_id, "⏳ در حال دریافت و تست لینک‌ها...")
-    url = data["config_url"]
-    if not url:
-        send_message(chat_id, "❌ لینک کانفیگ تنظیم نشده است.")
+    
+    if not data["config_urls"]:
+        send_message(chat_id, "❌ هیچ لینک کانفیگی تنظیم نشده است.")
         return
+    
+    if config_name:
+        url = data["config_urls"].get(config_name)
+        if not url:
+            send_message(chat_id, f"❌ لینک با نام '{config_name}' یافت نشد.")
+            return
+    else:
+        # اگر نام کانفیگ مشخص نشده، از اولین لینک استفاده می‌کند
+        url = next(iter(data["config_urls"].values()))
 
     try:
         response = requests.get(url, timeout=10)
@@ -93,6 +114,8 @@ def test_links_and_send(chat_id):
         f.write("\n".join(valid_links))
 
     caption = f"🕒 تست شده در: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n⏱ فاصله تست خودکار: {data['auto_test_interval']} دقیقه"
+    if config_name:
+        caption += f"\n🔗 نام کانفیگ: {config_name}"
     send_document(chat_id, filename, caption=caption)
     os.remove(filename)
 
@@ -151,7 +174,8 @@ def admin_panel(chat_id):
             ["🔗 تنظیم لینک کانفیگ", "📥 دریافت کانفیگ سالم"],
             ["📤 ارسال آموزش"],
             ["⏱ تنظیم فاصله تست خودکار"],
-            ["⚙ تنظیم لینک کانال (جوین اجباری)"]
+            ["⚙ تنظیم لینک کانال (جوین اجباری)"],
+            ["📋 لیست لینک‌های کانفیگ"]  # اضافه کردن دکمه جدید
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False
@@ -168,6 +192,24 @@ def user_panel(chat_id):
         "one_time_keyboard": False
     }
     send_message(chat_id, "به ربات خوش آمدید!", reply_markup=markup)
+
+def show_config_list(chat_id):
+    if not data["config_urls"]:
+        send_message(chat_id, "❌ هیچ لینک کانفیگی ذخیره نشده است.")
+        return
+    
+    keyboard = []
+    for name in data["config_urls"].keys():
+        keyboard.append([f"🔗 {name}"])
+    
+    keyboard.append(["🔙 بازگشت به پنل مدیریت"])
+    
+    markup = {
+        "keyboard": keyboard,
+        "resize_keyboard": True,
+        "one_time_keyboard": False
+    }
+    send_message(chat_id, "لطفاً یکی از لینک‌های کانفیگ را برای تست انتخاب کنید:", reply_markup=markup)
 
 def main():
     global OFFSET
@@ -196,8 +238,15 @@ def main():
             if chat_id in state:
                 action = state.pop(chat_id)
                 if action == "set_config_url" and is_admin:
-                    data["config_url"] = text.strip()
-                    send_message(chat_id, "✅ لینک ذخیره شد.")
+                    # حالت جدید: دریافت نام و لینک کانفیگ
+                    parts = text.strip().split(maxsplit=1)
+                    if len(parts) == 2:
+                        name, url = parts
+                        data["config_urls"][name] = url
+                        save_config_links()
+                        send_message(chat_id, f"✅ لینک با نام '{name}' ذخیره شد.")
+                    else:
+                        send_message(chat_id, "❌ فرمت صحیح: <نام کانفیگ> <لینک کانفیگ>")
 
                 elif action == "set_test_interval" and is_admin:
                     try:
@@ -234,7 +283,18 @@ def main():
                     user_panel(chat_id)
 
             elif text == "📥 دریافت کانفیگ سالم":
-                test_links_and_send(chat_id)
+                if is_admin:
+                    show_config_list(chat_id)
+                else:
+                    test_links_and_send(chat_id)
+
+            elif text.startswith("🔗 ") and is_admin:
+                # انتخاب لینک از لیست برای تست
+                config_name = text[2:]  # حذف پیشوند "🔗 "
+                test_links_and_send(chat_id, config_name)
+
+            elif text == "📋 لیست لینک‌های کانفیگ" and is_admin:
+                show_config_list(chat_id)
 
             elif text == "🎥 دریافت آموزش":
                 markup = {
@@ -303,7 +363,7 @@ def main():
 
             elif text == "🔗 تنظیم لینک کانفیگ" and is_admin:
                 state[chat_id] = "set_config_url"
-                send_message(chat_id, "لطفاً لینک کانفیگ را ارسال کنید:")
+                send_message(chat_id, "لطفاً نام و لینک کانفیگ را به این صورت ارسال کنید:\n<نام کانفیگ> <لینک کانفیگ>")
 
             elif text == "⏱ تنظیم فاصله تست خودکار" and is_admin:
                 state[chat_id] = "set_test_interval"
