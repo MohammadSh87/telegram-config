@@ -281,4 +281,20 @@ def main():
                 state[chat_id] = "set_test_interval"
                 send_message(chat_id, "فاصله تست خودکار به دقیقه (عدد) را وارد کنید:")
 
-            elif text == "⚙ تنظیم لینک کانال (جوین اجباری)" and is
+            elif text == "⚙ تنظیم لینک کانال (جوین اجباری)" and is_admin:
+                state[chat_id] = "set_channel_link"
+                send_message(chat_id, "لینک یا آیدی کانال (مثلاً @channelusername) را ارسال کنید:")
+
+            elif text == "🔙 بازگشت به پنل مدیریت" and is_admin:
+                admin_panel(chat_id)
+
+            elif text == "🔙 بازگشت به پنل کاربر":
+                user_panel(chat_id)
+
+            else:
+                send_message(chat_id, "دستور نامعتبر یا نا آشناست.")
+
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()
