@@ -23,38 +23,17 @@ data = {
     "join_channel_chat_id": None
 }
 
-CONFIG_FILE = 'config_links.json'
+# بارگذاری داده‌ها از فایل JSON
+try:
+    with open('config_links.json', 'r') as f:
+        data["config_urls"] = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    data["config_urls"] = {}
 
-def load_config():
-    """بارگذاری داده‌ها از فایل JSON"""
-    try:
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                loaded_data = json.load(f)
-                if isinstance(loaded_data, dict):
-                    data["config_urls"] = loaded_data
-                else:
-                    print("Error: Config file format is invalid")
-                    data["config_urls"] = {}
-        else:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump({}, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"Error loading config file: {e}")
-        data["config_urls"] = {}
-
-def save_config():
+def save_config_links():
     """ذخیره لینک‌های کانفیگ در فایل JSON"""
-    try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data["config_urls"], f, ensure_ascii=False, indent=4)
-        return True
-    except Exception as e:
-        print(f"Error saving config file: {e}")
-        return False
-
-# بارگذاری اولیه داده‌ها
-load_config()
+    with open('config_links.json', 'w') as f:
+        json.dump(data["config_urls"], f)
 
 def get_updates():
     global OFFSET
@@ -121,6 +100,7 @@ def test_links_and_send(chat_id, config_name=None):
                 if not link:
                     continue
                 
+                # تست لینک‌های مستقیم
                 if link.startswith("http"):
                     try:
                         r = requests.head(link, timeout=3)
@@ -128,6 +108,7 @@ def test_links_and_send(chat_id, config_name=None):
                             valid_links.append(link)
                     except:
                         continue
+                # تست لینک‌های پروکسی
                 elif any(link.startswith(proto) for proto in ["vmess://", "vless://", "ss://", "trojan://", "ssr://"]):
                     valid_links.append(link)
             
@@ -138,6 +119,7 @@ def test_links_and_send(chat_id, config_name=None):
             valid_configs[name] = []
             continue
 
+    # اگر فقط یک کانفیگ تست شده باشد
     if config_name:
         if not valid_configs[config_name]:
             send_message(chat_id, f"❌ هیچ لینک سالمی در کانفیگ '{config_name}' یافت نشد.")
@@ -151,6 +133,7 @@ def test_links_and_send(chat_id, config_name=None):
         send_document(chat_id, filename, caption=caption)
         os.remove(filename)
     else:
+        # اگر چند کانفیگ تست شده باشد
         has_valid = False
         for name, links in valid_configs.items():
             if links:
@@ -162,17 +145,57 @@ def test_links_and_send(chat_id, config_name=None):
                 caption = f"🕒 تست شده در: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n⏱ فاصله تست خودکار: {data['auto_test_interval']} دقیقه\n🔗 نام کانفیگ: {name}"
                 send_document(chat_id, filename, caption=caption)
                 os.remove(filename)
-                time.sleep(1)
+                time.sleep(1)  # تأخیر برای جلوگیری از محدودیت ارسال
         
         if not has_valid:
             send_message(chat_id, "❌ هیچ لینک سالمی در هیچ یک از کانفیگ‌ها یافت نشد.")
+
+def set_channel_chat_id():
+    username = data["join_channel_username"]
+    if not username:
+        return False
+
+    if username.startswith("@"):
+        username = username[1:]
+
+    try:
+        resp = requests.get(f"{API_URL}/getChat", params={"chat_id": f"@{username}"}, timeout=5)
+        result = resp.json()
+        if result.get("ok"):
+            chat_id = result["result"]["id"]
+            data["join_channel_chat_id"] = chat_id
+            return True
+    except Exception as e:
+        print("خطا در دریافت chat_id کانال:", e)
+    return False
+
+def check_join_channel(user_id):
+    if data["join_channel_chat_id"] is None:
+        if not set_channel_chat_id():
+            return True
+
+    channel_chat_id = data["join_channel_chat_id"]
+
+    try:
+        resp = requests.get(f"{API_URL}/getChatMember", params={
+            "chat_id": channel_chat_id,
+            "user_id": user_id
+        }, timeout=5)
+        result = resp.json()
+        if result.get("ok"):
+            status = result["result"]["status"]
+            if status in ["member", "administrator", "creator"]:
+                return True
+    except:
+        pass
+    return False
 
 def admin_panel(chat_id):
     markup = {
         "keyboard": [
             ["➕ افزودن لینک کانفیگ", "📝 ویرایش لینک کانفیگ"],
             ["🗑 حذف لینک کانفیگ", "📋 لیست لینک‌ها"],
-            ["📥 دریافت کانفیگ سالم"],
+            ["📥 دریافت کانفیگ سالم"],  # این تنها دکمه‌ای است که تست انجام می‌دهد
             ["📤 ارسال آموزش"],
             ["⏱ تنظیم فاصله تست خودکار"],
             ["⚙ تنظیم لینک کانال (جوین اجباری)"]
@@ -201,18 +224,16 @@ def show_config_list(chat_id, action=None):
     keyboard = []
     for name in data["config_urls"].keys():
         if action == "delete":
-            keyboard.append([f"🗑 حذف {name}"])
+            keyboard.append([{"text": f"حذف {name}", "callback_data": f"delete_{name}"}])
         elif action == "edit":
-            keyboard.append([f"✏️ ویرایش {name}"])
+            keyboard.append([{"text": f"ویرایش {name}", "callback_data": f"edit_{name}"}])
         else:
-            keyboard.append([f"🔗 {name}"])
+            keyboard.append([{"text": f"🔗 {name}", "callback_data": f"get_{name}"}])
     
-    keyboard.append(["🔙 بازگشت به پنل مدیریت"])
+    keyboard.append([{"text": "🔙 بازگشت به پنل مدیریت", "callback_data": "back_to_panel"}])
     
     markup = {
-        "keyboard": keyboard,
-        "resize_keyboard": True,
-        "one_time_keyboard": False
+        "inline_keyboard": keyboard
     }
     
     if action == "delete":
@@ -224,27 +245,21 @@ def show_config_list(chat_id, action=None):
 
 def handle_config_edit(chat_id, config_name):
     if config_name not in data["config_urls"]:
-        send_message(chat_id, f"❌ لینک با نام '{config_name}' یافت نشد.")
+        send_message(chat_id, "❌ لینک مورد نظر یافت نشد.")
         return
     
     state[chat_id] = ("edit_config", config_name)
-    send_message(chat_id, f"لطفاً نام جدید را برای کانفیگ '{config_name}' وارد کنید (یا برای حفظ نام فعلی، همان نام را تکرار کنید):\n\nلینک فعلی: {data['config_urls'][config_name]}")
+    send_message(chat_id, f"لطفاً نام جدید را برای '{config_name}' وارد کنید (یا همان نام را تکرار کنید):")
 
 def handle_config_delete(chat_id, config_name):
     if config_name not in data["config_urls"]:
-        send_message(chat_id, f"❌ لینک با نام '{config_name}' یافت نشد.")
+        send_message(chat_id, "❌ لینک مورد نظر یافت نشد.")
         return
     
-    markup = {
-        "keyboard": [
-            ["✅ بله، حذف کن"],
-            ["❌ خیر، لغو کن"]
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
-    state[chat_id] = ("confirm_delete", config_name)
-    send_message(chat_id, f"آیا مطمئن هستید که می‌خواهید لینک '{config_name}' را حذف کنید؟\n\nلینک: {data['config_urls'][config_name]}", reply_markup=markup)
+    del data["config_urls"][config_name]
+    save_config_links()
+    send_message(chat_id, f"✅ لینک با نام '{config_name}' با موفقیت حذف شد.")
+    admin_panel(chat_id)
 
 def main():
     global OFFSET
@@ -253,6 +268,26 @@ def main():
         updates = get_updates()
         for update in updates:
             OFFSET = update["update_id"]
+            
+            # پردازش callback_query
+            if "callback_query" in update:
+                callback_query = update["callback_query"]
+                chat_id = callback_query["message"]["chat"]["id"]
+                data_callback = callback_query["data"]
+                
+                if data_callback.startswith("delete_"):
+                    config_name = data_callback[7:]
+                    handle_config_delete(chat_id, config_name)
+                elif data_callback.startswith("edit_"):
+                    config_name = data_callback[5:]
+                    handle_config_edit(chat_id, config_name)
+                elif data_callback.startswith("get_"):
+                    config_name = data_callback[4:]
+                    test_links_and_send(chat_id, config_name)
+                elif data_callback == "back_to_panel":
+                    admin_panel(chat_id)
+                
+                continue
             
             message = update.get("message")
             if not message:
@@ -272,12 +307,9 @@ def main():
 
             if chat_id in state:
                 action, *params = state[chat_id]
-                
                 if action == "add_config" and is_admin:
+                    # دریافت نام کانفیگ
                     config_name = text.strip()
-                    if not config_name:
-                        send_message(chat_id, "❌ نام کانفیگ نمی‌تواند خالی باشد.")
-                        continue
                     if config_name in data["config_urls"]:
                         send_message(chat_id, "⚠️ این نام قبلاً استفاده شده است. لطفاً نام دیگری انتخاب کنید.")
                         continue
@@ -286,73 +318,74 @@ def main():
                     continue
                 
                 elif action == "add_config_url" and is_admin:
+                    # دریافت لینک کانفیگ
                     config_name = params[0]
                     config_url = text.strip()
-                    if not config_url.startswith(('http://', 'https://')):
-                        send_message(chat_id, "❌ لینک باید با http:// یا https:// شروع شود.")
-                        continue
-                    
                     data["config_urls"][config_name] = config_url
-                    if save_config():
-                        send_message(chat_id, f"✅ لینک کانفیگ با نام '{config_name}' با موفقیت ذخیره شد.")
-                    else:
-                        send_message(chat_id, f"⚠️ لینک ذخیره شد اما ذخیره در فایل با مشکل مواجه شد!")
+                    save_config_links()
                     state.pop(chat_id)
+                    send_message(chat_id, f"✅ لینک کانفیگ با نام '{config_name}' با موفقیت ذخیره شد.")
                     admin_panel(chat_id)
                     continue
                 
                 elif action == "edit_config" and is_admin:
+                    # دریافت نام جدید برای کانفیگ
                     old_name = params[0]
                     new_name = text.strip()
-                    if not new_name:
-                        send_message(chat_id, "❌ نام کانفیگ نمی‌تواند خالی باشد.")
-                        continue
                     if new_name in data["config_urls"] and new_name != old_name:
                         send_message(chat_id, "❌ این نام قبلاً استفاده شده است. لطفاً نام دیگری انتخاب کنید.")
                         continue
                     
                     state[chat_id] = ("edit_config_url", old_name, new_name)
-                    send_message(chat_id, f"لطفاً لینک جدید را برای '{new_name}' ارسال کنید:\n\nلینک فعلی: {data['config_urls'][old_name]}")
+                    send_message(chat_id, f"لطفاً لینک جدید را برای '{new_name}' ارسال کنید:")
                     continue
                 
                 elif action == "edit_config_url" and is_admin:
+                    # دریافت لینک جدید برای کانفیگ
                     old_name, new_name = params
                     new_url = text.strip()
                     
-                    if not new_url.startswith(('http://', 'https://')):
-                        send_message(chat_id, "❌ لینک باید با http:// یا https:// شروع شود.")
-                        continue
-                    
+                    # اگر نام تغییر کرده، لینک قدیمی را حذف می‌کنیم
                     if old_name != new_name:
                         del data["config_urls"][old_name]
                     
                     data["config_urls"][new_name] = new_url
-                    if save_config():
-                        send_message(chat_id, f"✅ لینک کانفیگ با نام '{new_name}' با موفقیت به‌روزرسانی شد.")
-                    else:
-                        send_message(chat_id, f"⚠️ لینک به‌روزرسانی شد اما ذخیره در فایل با مشکل مواجه شد!")
+                    save_config_links()
                     state.pop(chat_id)
+                    send_message(chat_id, f"✅ لینک کانفیگ با نام '{new_name}' با موفقیت به‌روزرسانی شد.")
                     admin_panel(chat_id)
                     continue
                 
-                elif action == "confirm_delete" and is_admin:
-                    config_name = params[0]
-                    if text == "✅ بله، حذف کن":
-                        if config_name in data["config_urls"]:
-                            del data["config_urls"][config_name]
-                            if save_config():
-                                send_message(chat_id, f"✅ لینک با نام '{config_name}' با موفقیت حذف شد.")
-                            else:
-                                send_message(chat_id, f"⚠️ لینک حذف شد اما ذخیره فایل با مشکل مواجه شد!")
-                        else:
-                            send_message(chat_id, f"❌ لینک با نام '{config_name}' یافت نشد.")
-                    elif text == "❌ خیر، لغو کن":
-                        send_message(chat_id, "❌ عمل حذف لغو شد.")
-                    else:
-                        send_message(chat_id, "دستور نامعتبر!")
-                    
+                elif action == "set_test_interval" and is_admin:
+                    try:
+                        interval = int(text)
+                        data["auto_test_interval"] = interval
+                        send_message(chat_id, f"✅ فاصله تست خودکار ذخیره شد: {interval} دقیقه")
+                    except:
+                        send_message(chat_id, "❌ عدد معتبر نیست.")
                     state.pop(chat_id)
-                    admin_panel(chat_id)
+                    continue
+                
+                elif action == "set_channel_link" and is_admin:
+                    data["join_channel_username"] = text.strip()
+                    data["join_channel_chat_id"] = None
+                    if set_channel_chat_id():
+                        send_message(chat_id, f"✅ لینک کانال ذخیره و chat_id گرفته شد: {data['join_channel_chat_id']}")
+                    else:
+                        send_message(chat_id, "❌ دریافت chat_id کانال موفق نبود. لطفاً آیدی را صحیح وارد کنید.")
+                    state.pop(chat_id)
+                    continue
+                
+                elif action.startswith("upload_video_") and is_admin:
+                    platform = action.split("_")[-1]
+                    video = message.get("video")
+                    if video:
+                        file_id = video["file_id"]
+                        data["videos"][platform] = file_id
+                        send_message(chat_id, f"✅ ویدیو {platform} ذخیره شد.")
+                    else:
+                        send_message(chat_id, "❌ فایل ویدیویی پیدا نشد.")
+                    state.pop(chat_id)
                     continue
 
             # دستورات عمومی
@@ -387,26 +420,76 @@ def main():
                 else:
                     test_links_and_send(chat_id)
 
-            elif text.startswith("🗑 حذف ") and is_admin:
-                config_name = text[4:].strip()
-                handle_config_delete(chat_id, config_name)
+            elif text == "🎥 دریافت آموزش":
+                markup = {
+                    "keyboard": [
+                        ["📱 Android", "🍏 iOS"],
+                        ["💻 Windows"],
+                        ["🔙 بازگشت به پنل کاربر"]
+                    ],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": False
+                }
+                send_message(chat_id, "لطفاً پلتفرم مورد نظر را انتخاب کنید:", reply_markup=markup)
 
-            elif text.startswith("✏️ ویرایش ") and is_admin:
-                config_name = text[5:].strip()
-                handle_config_edit(chat_id, config_name)
+            elif text == "📤 ارسال آموزش" and is_admin:
+                markup = {
+                    "keyboard": [
+                        ["آپلود Android", "آپلود iOS"],
+                        ["آپلود Windows"],
+                        ["🔙 بازگشت به پنل مدیریت"]
+                    ],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": False
+                }
+                send_message(chat_id, "پلتفرم برای آپلود آموزش:", reply_markup=markup)
 
-            elif text.startswith("🔗 ") and is_admin:
-                config_name = text[2:].strip()
-                test_links_and_send(chat_id, config_name)
+            elif text.startswith("آپلود ") and is_admin:
+                platform = text.split(" ")[1].lower()
+                state[chat_id] = f"upload_video_{platform}"
+                send_message(chat_id, f"لطفاً فایل ویدیویی {platform} را ارسال کنید:")
 
-            elif text == "🔙 بازگشت به پنل مدیریت":
+            elif text in ["📱 Android", "🍏 iOS", "💻 Windows"]:
+                platform = {
+                    "📱 Android": "android",
+                    "🍏 iOS": "ios",
+                    "💻 Windows": "windows"
+                }.get(text)
+                
+                if platform:
+                    file_id = data["videos"].get(platform)
+                    if file_id:
+                        try:
+                            payload = {
+                                "chat_id": chat_id,
+                                "video": file_id
+                            }
+                            resp = requests.post(f"{API_URL}/sendVideo", json=payload)
+                            if not resp.json().get("ok"):
+                                send_message(chat_id, f"خطا در ارسال ویدیو {platform}.")
+                        except Exception as e:
+                            send_message(chat_id, f"خطا در ارسال ویدیو {platform}.")
+                    else:
+                        send_message(chat_id, f"🚫 ویدیوی آموزش {platform} ذخیره نشده است.")
+                else:
+                    send_message(chat_id, "❌ پلتفرم نامعتبر است.")
+
+            elif text == "🔙 بازگشت به پنل کاربر":
+                user_panel(chat_id)
+
+            elif text == "🔙 بازگشت به پنل مدیریت" and is_admin:
                 admin_panel(chat_id)
 
+            elif text == "⏱ تنظیم فاصله تست خودکار" and is_admin:
+                state[chat_id] = ("set_test_interval",)
+                send_message(chat_id, "لطفاً فاصله تست خودکار را (بر حسب دقیقه) ارسال کنید:")
+
+            elif text == "⚙ تنظیم لینک کانال (جوین اجباری)" and is_admin:
+                state[chat_id] = ("set_channel_link",)
+                send_message(chat_id, "لطفاً لینک کانال را با @ وارد کنید (مثلاً @channelusername):")
+
             else:
-                if is_admin:
-                    send_message(chat_id, "دستور ناشناخته! لطفاً از منوی مدیریت استفاده کنید.")
-                else:
-                    send_message(chat_id, "دستور ناشناخته! لطفاً از منوی کاربری استفاده کنید.")
+                send_message(chat_id, "دستور ناشناخته یا دسترسی ندارید.")
 
         time.sleep(1)
 
